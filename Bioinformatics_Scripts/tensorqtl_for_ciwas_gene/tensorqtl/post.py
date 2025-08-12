@@ -10,7 +10,6 @@ from datetime import datetime
 
 sys.path.insert(1, os.path.dirname(__file__))
 from core import *
-import mixqtl
 import qtl.genotype as gt
 
 

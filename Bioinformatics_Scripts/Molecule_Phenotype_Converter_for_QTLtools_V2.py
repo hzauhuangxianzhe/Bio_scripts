@@ -23,11 +23,12 @@ except ImportError:
 # 定义一个合理的块大小，可以根据实际可用内存进行调整
 CHUNK_SIZE = 100000
 
-class MoleculePhenotypeConverterV2_0:
+class MoleculePhenotypeConverterV2_1:
     """
-    分子表型格式转换工具 (V2.0)
+    分子表型格式转换工具 (V2.1)
     
-    设计目标 (V2.0 更新):
+    设计目标 (V2.1 更新):
+    - 新增 --tensortqtl-mode, 适配 tensorQTL 格式 (#chr, start, end, targetID)。
     - 为 QTLtools 提供标准格式的输入文件 (.bed.gz)。
     - 位置优先: 严格以位置信息文件为基准，过滤掉没有坐标的表型。
     - 高度灵活: 支持无标题行文件，允许用户通过列号指定。
@@ -89,7 +90,6 @@ class MoleculePhenotypeConverterV2_0:
         return True
     
     def _detect_separator(self, filepath, manual_sep=None, no_header=False, max_lines=50):
-        # 【已修复】: 采用更严谨的分隔符检测逻辑
         if manual_sep:
             self.logger.info(f"用户手动指定分隔符: '{manual_sep}'")
             return manual_sep
@@ -110,7 +110,6 @@ class MoleculePhenotypeConverterV2_0:
                 if not counts: continue
                 mean_count = np.mean(counts)
                 std_dev = np.std(counts)
-                # 必须能分割成多于1列
                 if mean_count > 1.5:
                     results.append({'sep': sep, 'std': std_dev, 'mean': mean_count})
             
@@ -118,7 +117,6 @@ class MoleculePhenotypeConverterV2_0:
                 self.logger.warning("未检测到有效的多列分隔符，将使用默认制表符。")
                 return '\t'
             
-            # 优先选择标准差最小的，如果标准差相同，选择平均列数最多的
             best_result = sorted(results, key=lambda x: (x['std'], -x['mean']))[0]
             best_sep = best_result['sep']
             
@@ -208,37 +206,23 @@ class MoleculePhenotypeConverterV2_0:
             return None
 
     def _chromosome_sort_key(self, chr_str):
-        """
-        自定义染色体排序键函数，支持多种格式：
-        - 纯数字: 1, 2, ..., 26
-        - chr前缀: chr1, chr2, ..., chr26  
-        - 棉花格式: HC04_A01-HC04_A13, HC04_D01-HC04_D13
-        """
         chr_str = str(chr_str).strip()
         
-        # 棉花染色体格式 HC04_A01-HC04_A13, HC04_D01-HC04_D13
         cotton_match = re.match(r'^HC04_([AD])(\d+)$', chr_str)
         if cotton_match:
             letter = cotton_match.group(1)
             number = int(cotton_match.group(2))
-            # A染色体优先，然后按数字排序
             return (0 if letter == 'A' else 1, number)
         
-        # chr前缀格式
-        chr_match = re.match(r'^chr(.+)$', chr_str, re.IGNORECASE)
+        chr_match = re.match(r'^(?:chr)?(.+)$', chr_str, re.IGNORECASE)
         if chr_match:
             chr_content = chr_match.group(1)
             try:
-                return (2, int(chr_content))  # 优先级低于棉花格式
+                return (2, int(chr_content)) 
             except ValueError:
-                return (2, 999999, chr_content)  # 非数字的chr
+                return (3, chr_content) 
         
-        # 纯数字格式
-        try:
-            return (3, int(chr_str))  # 优先级最低
-        except ValueError:
-            # 其他格式按字典序
-            return (4, chr_str)
+        return (4, chr_str)
 
     def _process_chunk(self, chunk_df, chunk_num, args, col_map, sample_cols, strand_info, position_info):
         work_df = chunk_df.copy()
@@ -305,17 +289,42 @@ class MoleculePhenotypeConverterV2_0:
             else:
                 bed_start, bed_end = start_1based - 1, end_1based
         work_df['bed_start'], work_df['bed_end'] = bed_start, bed_end
+        
+        # ### V2.1 变更: 仅在非tensorQTL模式下处理链信息 ###
+        # 注意: 即使在tensorQTL模式下，此代码块也会运行，但其结果'strand'列不会被使用
         if args.use_strand:
             if strand_info: work_df['strand'] = work_df['gene_id_clean'].map(strand_info).fillna(self.default_strand)
             else: work_df['strand'] = self.default_strand
         else:
             work_df['strand'] = self.default_strand
+            
         negative_mask = work_df['bed_start'] < 0
         for line_num in work_df.loc[negative_mask, 'original_line']: self._add_abnormal_record(line_num, "计算后的起始坐标为负数，已丢弃")
         work_df = work_df[~negative_mask]
         if work_df.empty: return None
         work_df = self._process_and_transform_phenotypes(work_df, sample_cols)
-        base_cols_df = pd.DataFrame({'#chr': work_df['chr'], 'start': work_df['bed_start'].astype('Int64'), 'end': work_df['bed_end'].astype('Int64'), 'pid': work_df['gene_id_clean'], 'gid': work_df['gene_id_clean'], 'strand': work_df['strand']})
+        
+        ### V2.1 更新：根据 tensortqtl-mode 动态构建输出列 ###
+        if args.tensortqtl_mode:
+            # tensorQTL 模式: #chr, start, end, targetID
+            base_cols_dict = {
+                '#chr': work_df['chr'],
+                'start': work_df['bed_start'].astype('Int64'),
+                'end': work_df['bed_end'].astype('Int64'),
+                'targetID': work_df['gene_id_clean']
+            }
+        else:
+            # 默认 QTLtools 模式: #chr, start, end, pid, gid, strand
+            base_cols_dict = {
+                '#chr': work_df['chr'],
+                'start': work_df['bed_start'].astype('Int64'),
+                'end': work_df['bed_end'].astype('Int64'),
+                'pid': work_df['gene_id_clean'],
+                'gid': work_df['gene_id_clean'],
+                'strand': work_df['strand']
+            }
+
+        base_cols_df = pd.DataFrame(base_cols_dict)
         phenotype_df = work_df[sample_cols]
         return pd.concat([base_cols_df, phenotype_df], axis=1)
 
@@ -369,19 +378,15 @@ class MoleculePhenotypeConverterV2_0:
         try:
             self.logger.info(f"开始对文件进行自定义排序: {unsorted_path}")
             
-            # 读取数据并进行自定义排序
             df = pd.read_csv(unsorted_path, sep='\t', dtype={'start': 'Int64', 'end': 'Int64'})
             
-            # 添加排序键
-            df['_sort_key'] = df['#chr'].apply(self._chromosome_sort_key)
+            chr_col_name = df.columns[0]
+            self.logger.info(f"使用列 '{chr_col_name}' 进行染色体排序。")
+            df['_sort_key'] = df[chr_col_name].apply(self._chromosome_sort_key)
             
-            # 多级排序：先按染色体，再按start，最后按end
             df_sorted = df.sort_values(['_sort_key', 'start', 'end'])
-            
-            # 删除排序键列
             df_sorted = df_sorted.drop('_sort_key', axis=1)
             
-            # 写入排序后的文件
             df_sorted.to_csv(sorted_path, sep='\t', index=False, na_rep='NA')
             
             self.logger.info("文件排序完成。")
@@ -475,15 +480,18 @@ class MoleculePhenotypeConverterV2_0:
         return df
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='分子表型格式转换为QTLtools BED格式的工具 (V2.0 - Final)', formatter_class=argparse.RawTextHelpFormatter)
+    ### V2.1 更新: 修改描述信息 ###
+    parser = argparse.ArgumentParser(description='分子表型格式转换为QTLtools/tensorQTL标准BED格式的工具 (V2.1)', formatter_class=argparse.RawTextHelpFormatter)
     req_group = parser.add_argument_group('输入/输出 (必选)')
     req_group.add_argument('-i', '--input', required=True, help='输入的分子表型数据文件')
     req_group.add_argument('-o', '--output', required=True, help='最终输出文件的前缀')
     req_group.add_argument('--gene-id', required=True, help='表型数据中的基因/分子ID列名或列号(1-based)')
+    
     pos_group = parser.add_argument_group('位置信息来源 (必须选择一种)')
     pos_exclusive = pos_group.add_mutually_exclusive_group(required=True)
     pos_exclusive.add_argument('--embedded-pos', action='store_true', help='位置信息在表型数据文件中')
     pos_exclusive.add_argument('--position-file', help='单独的位置信息文件路径 (以此文件为基准)')
+    
     col_group = parser.add_argument_group('列名/列号指定 (根据模式选择)')
     col_group.add_argument('--chr', help='染色体列名/列号 (embedded-pos 时必需)')
     col_group.add_argument('--start', help='起始位置列名/列号 (embedded-pos 时必需)')
@@ -500,15 +508,22 @@ def parse_args():
     col_group.add_argument('--pos-anchor1-end-col', help='(Loop) 位置文件中 anchor1 结束列名/列号')
     col_group.add_argument('--pos-anchor2-start-col', help='(Loop) 位置文件中 anchor2 起始列名/列号')
     col_group.add_argument('--pos-anchor2-end-col', help='(Loop) 位置文件中 anchor2 结束列名/列号')
-    header_group = parser.add_argument_group('V2.0: 标题行与特殊列')
+    
+    header_group = parser.add_argument_group('标题行与特殊列')
     header_group.add_argument('--no-header-main', action='store_true', help='主数据文件无标题行。列名参数需提供列号(1-based)。')
     header_group.add_argument('--no-header-pos', action='store_true', help='位置信息文件无标题行。列名参数需提供列号(1-based)。')
     header_group.add_argument('--no-header-strand', action='store_true', help='链信息文件无标题行。列名参数需提供列号(1-based)。')
     header_group.add_argument('--main-strand-col', help='(可选) 主数据文件中包含的链信息列名/列号, 指定后此列将被忽略。')
-    transform_group = parser.add_argument_group('V2.0: 表型数据转换')
+    
+    transform_group = parser.add_argument_group('表型数据转换')
     transform_group.add_argument('--transform', choices=['none', 'log2', 'zscore', 'rint'], default='none', help="对每个表型(行)的数据进行转换 (默认: none)")
     transform_group.add_argument('--rint-stochastic', action='store_true', help="当使用 'rint' 转换时, 启用随机排序处理ties (默认不启用)")
-    behavior_group = parser.add_argument_group('格式与行为控制')
+    
+    ### V2.1 更新：添加新的输出格式控制参数组 ###
+    output_format_group = parser.add_argument_group('输出格式控制 (V2.1 新增)')
+    output_format_group.add_argument('--tensortqtl-mode', action='store_true', help='启用 tensorQTL 兼容模式 (输出列: #chr, start, end, targetID)')
+
+    behavior_group = parser.add_argument_group('格式与行为控制 (通用)')
     behavior_group.add_argument('--input-system', choices=['bed', '1-based'], default='bed', help="输入坐标系统 (默认: bed)")
     behavior_group.add_argument('--default-strand', choices=['+', '-', '.'], default='+', help='默认链信息 (默认: +)')
     behavior_group.add_argument('--separator', help='手动指定输入文件的列分隔符')
@@ -516,7 +531,8 @@ def parse_args():
     mode_group.add_argument('--loop-mode', action='store_true', help='染色质环模式')
     mode_group.add_argument('--recalculate-pos', action='store_true', help='中点模式')
     mode_group.add_argument('--single-base-mode', action='store_true', help='单碱基模式')
-    strand_group = parser.add_argument_group('链信息 (可选)')
+    
+    strand_group = parser.add_argument_group('链信息 (可选, 非tensorQTL模式下生效)')
     strand_group.add_argument('--use-strand', action='store_true', help='启用链信息处理')
     strand_group.add_argument('--gff3', help='GFF3文件路径')
     strand_group.add_argument('--gff3-gene-attr', default='ID', help='GFF3中匹配基因ID的字段 (默认: ID)')
@@ -526,7 +542,6 @@ def parse_args():
     return parser.parse_args()
 
 def validate_args(args):
-    """验证命令行参数的逻辑一致性 (V2.0 - Final)"""
     if not Path(args.input).exists(): return False, f"输入文件不存在: {args.input}"
     def is_int(s):
         if s is None: return True
@@ -547,7 +562,6 @@ def validate_args(args):
 
     if args.position_file:
         if not Path(args.position_file).exists(): return False, f"位置信息文件不存在: {args.position_file}"
-        # 【已修复】: 完整的位置文件参数验证
         pos_cols = {'pos_gene_col': args.pos_gene_col, 'pos_chr_col': args.pos_chr_col}
         if args.loop_mode:
             pos_cols.update({'pos_anchor1_start_col': args.pos_anchor1_start_col, 'pos_anchor1_end_col': args.pos_anchor1_end_col, 'pos_anchor2_start_col': args.pos_anchor2_start_col, 'pos_anchor2_end_col': args.pos_anchor2_end_col})
@@ -579,8 +593,12 @@ def main():
     output_prefix, final_gz_path = args.output, Path(f"{args.output}.bed.gz")
     temp_unsorted_path = Path(f"{output_prefix}.unsorted.tmp.bed")
     temp_unsorted_path.parent.mkdir(parents=True, exist_ok=True)
-    converter = MoleculePhenotypeConverterV2_0(output_prefix, args.default_strand, args.transform, args.rint_stochastic)
-    converter.logger.info("分子表型格式转换工具启动 (V2.0 - 最终生产版)")
+    
+    ### V2.1 更新: 实例化新类 ###
+    converter = MoleculePhenotypeConverterV2_1(output_prefix, args.default_strand, args.transform, args.rint_stochastic)
+    converter.logger.info("分子表型格式转换工具启动 (V2.1)")
+    if args.tensortqtl_mode:
+        converter.logger.info("已启用 tensorQTL 兼容模式。")
     converter.logger.info(f"运行参数: {' '.join(sys.argv[1:])}")
     
     try:
@@ -588,7 +606,9 @@ def main():
         if args.position_file:
             position_info = converter.load_position_info(args, args.separator)
             if position_info is None: sys.exit(1)
-        if args.use_strand:
+        
+        # 在 tensorQTL 模式下，不加载任何链信息
+        if not args.tensortqtl_mode and args.use_strand:
             if args.gff3: strand_info = converter.load_gff3_strand(args.gff3, args.gff3_gene_attr)
             elif args.strand_file: strand_info = converter.load_strand_file(args.strand_file, args.strand_gene_col, args.strand_col, args.no_header_strand, args.separator)
         

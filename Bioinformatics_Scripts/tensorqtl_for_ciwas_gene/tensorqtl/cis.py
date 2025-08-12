@@ -682,6 +682,7 @@ def map_cis(genotype_df, variant_df, phenotype_df, phenotype_pos_df, covariates_
                 logger.write(f'WARNING: skipping {phenotype_id} (no valid variants after filtering)')
                 continue
 
+
             phenotype_t = torch.tensor(phenotype, dtype=torch.float).to(device)
             # <--- [DOF修正] 'idof' 在此为每个表型单独计算
             if paired_covariate_df is None or phenotype_id not in paired_covariate_df:
