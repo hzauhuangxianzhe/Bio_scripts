@@ -29,12 +29,13 @@ output_dtype_dict = {
     'variant_id':str,
     'start_distance':np.int32,
     'end_distance':np.int32,
-    'ma_samples':np.int32,
-    'ma_count':np.int32,
-    'af':np.float32,
+    # 'ma_samples':np.int32,
+    # 'ma_count':np.int32,
+    # 'af':np.float32,
     'pval_nominal':np.float64,
     'slope':np.float32,
     'slope_se':np.float32,
+    'r2':np.float32,  # <--- 在这里添加r2的数据类型定义
     'pval_perm':np.float64,
     'pval_beta':np.float64,
 }
@@ -73,53 +74,6 @@ class Residualizer(object):
         else:
             M0_t = M_t - torch.mm(torch.mm(M0_t, self.Q_t), self.Q_t.t())
         return M0_t
-
-
-def calculate_maf(genotype_t, alleles=2):
-    """Calculate minor allele frequency"""
-    af_t = genotype_t.sum(1) / (alleles * genotype_t.shape[1])
-    return torch.where(af_t > 0.5, 1 - af_t, af_t)
-
-
-def get_allele_stats(genotype_t):
-    """Returns allele frequency, minor allele samples, and minor allele counts (row-wise)."""
-    # allele frequency
-    n2 = 2 * genotype_t.shape[1]
-    af_t = genotype_t.sum(1) / n2
-    # minor allele samples and counts
-    ix_t = af_t <= 0.5
-    m = genotype_t > 0.5
-    a = m.sum(1).int()
-    b = (genotype_t < 1.5).sum(1).int()
-    ma_samples_t = torch.where(ix_t, a, b)
-    a = (genotype_t * m.float()).sum(1).int()
-    # a = (genotype_t * m.float()).sum(1).round().int()  # round for missing/imputed genotypes
-    ma_count_t = torch.where(ix_t, a, n2-a)
-    return af_t, ma_samples_t, ma_count_t
-
-
-def filter_maf(genotypes_t, variant_ids, maf_threshold, alleles=2):
-    """Calculate MAF and filter genotypes that don't pass threshold"""
-    af_t = genotypes_t.sum(1) / (alleles * genotypes_t.shape[1])
-    maf_t = torch.where(af_t > 0.5, 1 - af_t, af_t)
-    if maf_threshold > 0:
-        mask_t = maf_t >= maf_threshold
-        genotypes_t = genotypes_t[mask_t]
-        variant_ids = variant_ids[mask_t.cpu().numpy().astype(bool)]
-        af_t = af_t[mask_t]
-    return genotypes_t, variant_ids, af_t
-
-
-def filter_maf_interaction(genotypes_t, interaction_mask_t=None, maf_threshold_interaction=0.05):
-    # filter monomorphic sites (to avoid colinearity)
-    mask_t = ~((genotypes_t==0).all(1) | (genotypes_t==1).all(1) | (genotypes_t==2).all(1))
-    if interaction_mask_t is not None:
-        upper_t = calculate_maf(genotypes_t[:, interaction_mask_t]) >= maf_threshold_interaction - 1e-7
-        lower_t = calculate_maf(genotypes_t[:,~interaction_mask_t]) >= maf_threshold_interaction - 1e-7
-        mask_t = mask_t & upper_t & lower_t
-    genotypes_t = genotypes_t[mask_t]
-    return genotypes_t, mask_t
-
 
 def impute_mean(genotypes_t, missing=-9):
     """Impute missing genotypes to mean"""
@@ -260,8 +214,7 @@ def calculate_interaction_nominal(genotypes_t, phenotypes_t, interaction_t, resi
     if not return_sparse:
         # calculate pval
         # pval_t = tf.scalar_mul(2, tdist.cdf(-tf.abs(tstat_t)))  # (ng x 3 x np)
-        af_t, ma_samples_t, ma_count_t = get_allele_stats(genotypes_t)
-        return tstat_t, b_t, b_se_t, af_t, ma_samples_t, ma_count_t
+        return tstat_t, b_t, b_se_t
 
     else:  # sparse output
         if ni > 1:
