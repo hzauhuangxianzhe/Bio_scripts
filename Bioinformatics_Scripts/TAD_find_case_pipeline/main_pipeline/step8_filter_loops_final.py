@@ -7,17 +7,12 @@ import sys
 def filter_loops_by_conditions(loop_analysis_file, pvalue_summary_file, output_file, p_threshold=0.05):
     """
     根据两阶段的复杂条件筛选Loop分析结果。
-
-    Args:
-        loop_analysis_file (str): 第6步生成的loop分析文件路径。
-        pvalue_summary_file (str): 第7步生成的p值汇总文件路径。
-        output_file (str): 最终筛选结果的输出文件路径。
-        p_threshold (float): P值的显著性阈值。
     """
     try:
         print("--- 阶段1 (Python子脚本): 正在加载输入文件... ---", file=sys.stderr)
-        loop_df = pd.read_csv(loop_analysis_file)
-        pvalue_df = pd.read_csv(pvalue_summary_file)
+        # Use more robust read_csv options
+        loop_df = pd.read_csv(loop_analysis_file, encoding='utf-8')
+        pvalue_df = pd.read_csv(pvalue_summary_file, encoding='utf-8')
         print(f"成功加载 Loop分析文件，共 {len(loop_df)} 行。", file=sys.stderr)
         print(f"成功加载 P值汇总文件，共 {len(pvalue_df)} 行。", file=sys.stderr)
 
@@ -28,10 +23,8 @@ def filter_loops_by_conditions(loop_analysis_file, pvalue_summary_file, output_f
     print("\n--- 阶段2 (Python子脚本): 开始执行第一阶段筛选 (基于距离)... ---", file=sys.stderr)
     
     # --- 第一阶段筛选 ---
-    # 1. 创建辅助列，用于存放统一单位（kb）的数值
     loop_df['distance_numeric_kb'] = np.nan
     
-    # 2. 统一单位并转换为数值
     kb_mask = loop_df['Distance_Relationship'].str.contains('kb', na=False)
     loop_df.loc[kb_mask, 'distance_numeric_kb'] = pd.to_numeric(
         loop_df.loc[kb_mask, 'Distance_Relationship'].str.replace('kb|\\+', '', regex=True),
@@ -44,13 +37,10 @@ def filter_loops_by_conditions(loop_analysis_file, pvalue_summary_file, output_f
         errors='coerce'
     ) / 1000
 
-    # 3. 构建筛选条件①
     cond1_sub1 = (loop_df['Distance_Relationship'] == 'Gene in TAD')
-    # 使用更新后的范围 (-50kb, +50kb)
     cond1_sub2 = (loop_df['distance_numeric_kb'] > -50) & (loop_df['distance_numeric_kb'] < 50)
     final_condition1 = cond1_sub1 | cond1_sub2
     
-    # 4. 根据条件①，将数据拆分为两部分
     df_kept_by_cond1 = loop_df[final_condition1].copy()
     df_remaining = loop_df[~final_condition1].copy()
     
@@ -60,23 +50,45 @@ def filter_loops_by_conditions(loop_analysis_file, pvalue_summary_file, output_f
     
     # --- 第二阶段筛选 (仅对第一阶段未被保留的数据进行) ---
     
-    # 1. 从剩余数据中，筛选出存在Loop的候选行
     candidates_cond2 = df_remaining[df_remaining['Matched_Loop_ID'].notna()].copy()
     
-    # 2. 从P值文件中，筛选出至少有一个P值显著的记录
     significant_pvalues = pvalue_df[
         (pvalue_df['Wilcoxon_P_Value_Loop_Strength'] < p_threshold) |
         (pvalue_df['Categorical_P_Value_Loop_Presence'] < p_threshold)
     ].copy()
     
-    # 3. 提取显著记录中唯一的 Gene-TAD-Loop 组合，用于快速匹配
-    # 我们只需要Gene_ID, TAD_ID, 和Loop_ID来标识一个需要保留的Loop
+    # 提取显著记录中唯一的 Gene-TAD-Loop 组合
     significant_loops_to_keep = significant_pvalues[['Gene_ID', 'TAD_ID', 'Loop_ID']].drop_duplicates()
-    # 将Matched_Loop_ID重命名以进行合并
+    
+    # --- 最终修复: 强制清理所有匹配列 ---
+    match_cols_loop = ['Gene_ID', 'TAD_ID', 'Matched_Loop_ID']
+    match_cols_pvalue = ['Gene_ID', 'TAD_ID', 'Loop_ID']
+
+    # Rename and clean pvalue_df columns
     significant_loops_to_keep.rename(columns={'Loop_ID': 'Matched_Loop_ID'}, inplace=True)
     
-    # 4. 将候选行与显著的Loop组合进行内连接（inner join）
-    # 只有那些既存在Loop，又在p值文件中有显著记录的行才会被保留下来
+    # Force string conversion and strip all whitespace from relevant columns
+    for col in match_cols_loop:
+        if col in candidates_cond2.columns:
+            candidates_cond2[col] = candidates_cond2[col].astype(str).str.strip().str.replace(' ', '')
+    
+    for col in match_cols_pvalue:
+        if col in significant_loops_to_keep.columns:
+            significant_loops_to_keep[col] = significant_loops_to_keep[col].astype(str).str.strip().str.replace(' ', '')
+    
+    # 修复：确保 Matched_Loop_ID 列类型一致，处理浮点数
+    candidates_cond2['Matched_Loop_ID'] = pd.to_numeric(candidates_cond2['Matched_Loop_ID'], errors='coerce').astype('Int64').astype(str)
+    significant_loops_to_keep['Matched_Loop_ID'] = pd.to_numeric(significant_loops_to_keep['Matched_Loop_ID'], errors='coerce').astype('Int64').astype(str)
+    
+    # 调试输出
+    print(f"调试：candidates_cond2 条数: {len(candidates_cond2)}", file=sys.stderr)
+    print(f"调试：significant_loops_to_keep 条数: {len(significant_loops_to_keep)}", file=sys.stderr)
+    if len(candidates_cond2) > 0:
+        print(f"调试：candidates_cond2 样本:\n{candidates_cond2[['Gene_ID', 'TAD_ID', 'Matched_Loop_ID']].head()}", file=sys.stderr)
+    if len(significant_loops_to_keep) > 0:
+        print(f"调试：significant_loops_to_keep 样本:\n{significant_loops_to_keep.head()}", file=sys.stderr)
+            
+    # 将候选行与显著的Loop组合进行内连接（inner join）
     df_kept_by_cond2 = pd.merge(
         candidates_cond2,
         significant_loops_to_keep,

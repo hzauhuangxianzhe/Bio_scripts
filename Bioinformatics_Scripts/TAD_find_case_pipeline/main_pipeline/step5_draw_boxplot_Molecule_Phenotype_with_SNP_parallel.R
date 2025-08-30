@@ -89,6 +89,21 @@ load_all_data <- function() {
   # Clean column names
   colnames(data_list$gene_exp)[1] <- gsub("^#", "", colnames(data_list$gene_exp)[1])
   
+  # --- 在这里添加你的调试代码 ---
+  # 添加调试信息来检查 triplets 文件
+  cat(paste0("Rscript is reading triplets file from: ", PATHS$TRIPLETS, "\n"), file = stderr())
+  
+  # 检查并打印 triplets 数据框的头部，以及其列名
+  if (nrow(data_list$triplets) > 0) {
+      triplets_head <- head(data_list$triplets)
+      cat("First few rows of triplets file:\n", file = stderr())
+      print(triplets_head, file = stderr())
+      cat("\nColumn names of triplets file:\n", file = stderr())
+      print(colnames(data_list$triplets), file = stderr())
+  } else {
+      cat("Triplets file is empty or data could not be read.\n", file = stderr())
+  }
+  
   # --- 修改点⑤: 将所有cat输出重定向到stderr ---
   cat("Data loading complete:", nrow(data_list$triplets), "triplets\n", file = stderr())
   return(data_list)

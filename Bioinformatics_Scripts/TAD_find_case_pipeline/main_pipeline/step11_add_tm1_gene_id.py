@@ -1,5 +1,7 @@
+#!/usr/bin/env python3
 import pandas as pd
 import sys
+import os # 引入os库，以便检查文件大小
 
 # 该脚本通过命令行参数接收输入和输出文件路径
 if len(sys.argv) != 4:
@@ -31,15 +33,27 @@ def add_tm1_gene_id_to_file():
         sys.exit(1)
     
     # 2. 读取第9步生成的四元组汇总文件
+    # 使用 pd.read_csv() 的参数处理空文件
     try:
-        quartet_df = pd.read_csv(quartet_input)
-        if 'Gene_ID' not in quartet_df.columns:
+        # 尝试读取文件头，如果文件为空，直接跳过
+        if os.path.getsize(quartet_input) == 0:
+            print(f"警告: 四元组文件 '{quartet_input}' 为空。", file=sys.stderr)
+            quartet_df = pd.DataFrame(columns=['Gene_ID']) # 创建一个空的DataFrame以备后续操作
+        else:
+            quartet_df = pd.read_csv(quartet_input)
+            
+        if not quartet_df.empty and 'Gene_ID' not in quartet_df.columns:
             print(f"错误: 四元组文件 '{quartet_input}' 缺少必需的列 'Gene_ID'。", file=sys.stderr)
             sys.exit(1)
+            
         print(f"成功加载四元组汇总文件，共 {len(quartet_df)} 行。")
     except FileNotFoundError:
         print(f"错误: 四元组文件未找到: {quartet_input}", file=sys.stderr)
         sys.exit(1)
+    except pd.errors.EmptyDataError:
+        print(f"警告: 四元组文件 '{quartet_input}' 不包含数据。", file=sys.stderr)
+        # 创建一个带有预期列的空 DataFrame，避免后续合并出错
+        quartet_df = pd.DataFrame(columns=['Gene_ID'])
     except Exception as e:
         print(f"读取四元组文件时发生错误: {e}", file=sys.stderr)
         sys.exit(1)
@@ -53,11 +67,15 @@ def add_tm1_gene_id_to_file():
     merged_df = merged_df.rename(columns={'TM1': 'TM1_Gene_ID'})
 
     # 5. 删除合并过程中产生的重复列，即原来的'HC04'列
-    merged_df = merged_df.drop(columns=['HC04'])
+    # 只有当 'HC04' 列存在时才删除，以防 quartet_df 为空时出错
+    if 'HC04' in merged_df.columns:
+        merged_df = merged_df.drop(columns=['HC04'])
 
     # 6. 将'TM1_Gene_ID'列移动到第一列
-    tm1_gene_id_col = merged_df.pop('TM1_Gene_ID')
-    merged_df.insert(0, 'TM1_Gene_ID', tm1_gene_id_col)
+    # 只有当 'TM1_Gene_ID' 列存在时才移动
+    if 'TM1_Gene_ID' in merged_df.columns:
+        tm1_gene_id_col = merged_df.pop('TM1_Gene_ID')
+        merged_df.insert(0, 'TM1_Gene_ID', tm1_gene_id_col)
     
     # 7. 保存最终的CSV文件，不包含索引列
     merged_df.to_csv(output, index=False)
