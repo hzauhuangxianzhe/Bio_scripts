@@ -23,13 +23,14 @@ except ImportError:
 # 定义一个合理的块大小，可以根据实际可用内存进行调整
 CHUNK_SIZE = 100000
 
-class MoleculePhenotypeConverterV2_1:
+class MoleculePhenotypeConverterV2_2:
     """
-    分子表型格式转换工具 (V2.1)
+    分子表型格式转换工具 (V2.2)
     
-    设计目标 (V2.1 更新):
-    - 新增 --tensortqtl-mode, 适配 tensorQTL 格式 (#chr, start, end, targetID)。
-    - 为 QTLtools 提供标准格式的输入文件 (.bed.gz)。
+    设计目标 (V2.2 更新):
+    - 继承 V2.1: 适配 tensorQTL 格式 (#chr, start, end, targetID)。
+    - 新增 --keep-coords-mode: 允许直接输出用户提供的(假定为0-based BED)坐标，跳过所有转换。
+    - 新增 --ignore-cols: 允许用户指定忽略读取任意列。
     - 位置优先: 严格以位置信息文件为基准，过滤掉没有坐标的表型。
     - 高度灵活: 支持无标题行文件，允许用户通过列号指定。
     - 数据转换: 内置多种表型值转换方法 (log2, Z-score, RINT)。
@@ -149,7 +150,8 @@ class MoleculePhenotypeConverterV2_1:
                     start_val = self._safe_convert_single_coord(row['start'])
                     if start_val is None: continue
                     info['start'] = start_val
-                    if not args.single_base_mode or args.recalculate_pos:
+                    # V2.2 更新：keep-coords-mode 也需要 end 列
+                    if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode:
                         end_val = self._safe_convert_single_coord(row.get('end'))
                         if end_val is None: continue
                         if start_val > end_val: start_val, end_val = end_val, start_val
@@ -248,18 +250,24 @@ class MoleculePhenotypeConverterV2_1:
                 for col in ['a1_start', 'a1_end', 'a2_start', 'a2_end']: work_df[col] = self._safe_convert_coord(work_df[col])
             else:
                 work_df['start'] = self._safe_convert_coord(work_df['start'])
-                if not args.single_base_mode or args.recalculate_pos: work_df['end'] = self._safe_convert_coord(work_df['end'])
+                if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode: 
+                    work_df['end'] = self._safe_convert_coord(work_df['end'])
+        
         coord_cols_to_check = {'chr': '缺失染色体信息'}
         if args.loop_mode: coord_cols_to_check.update({ 'a1_start': '无效anchor1_start', 'a1_end': '无效anchor1_end', 'a2_start': '无效anchor2_start', 'a2_end': '无效anchor2_end' })
         else:
             coord_cols_to_check['start'] = '无效start坐标'
-            if not args.single_base_mode or args.recalculate_pos: coord_cols_to_check['end'] = '无效end坐标'
+            if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode: 
+                coord_cols_to_check['end'] = '无效end坐标'
+                
         for col, reason in coord_cols_to_check.items():
             if col not in work_df.columns: continue
             mask = work_df[col].isna()
             for line_num in work_df.loc[mask, 'original_line']: self._add_abnormal_record(line_num, reason)
             work_df.dropna(subset=[col], inplace=True)
         if work_df.empty: return None
+        
+        # ### V2.2 坐标计算逻辑更新 ###
         if args.loop_mode:
             if args.input_system == 'bed':
                 a1s, a1e, a2s, a2e = work_df['a1_start'].astype(int)+1, work_df['a1_end'].astype(int), work_df['a2_start'].astype(int)+1, work_df['a2_end'].astype(int)
@@ -268,30 +276,42 @@ class MoleculePhenotypeConverterV2_1:
             mid1, mid2 = (a1s + a1e) // 2, (a2s + a2e) // 2
             final_mid = (mid1 + mid2) // 2
             bed_start, bed_end = final_mid - 1, final_mid
+        
+        elif args.keep_coords_mode:
+            # V2.2 新增: 维持坐标模式
+            # 假定输入已经是 0-based start, 1-based end (标准BED格式), 原样输出。
+            # self.logger.debug("启用 keep-coords-mode, 坐标将原样输出。") # Debug日志，默认不显示
+            bed_start = work_df['start'].astype(int)
+            bed_end = work_df['end'].astype(int)
+
         else:
+            # V2.1 及之前的标准转换逻辑 (default, single-base, recalculate-pos)
             start_raw = work_df['start'].astype(int)
             use_end_col = (not args.single_base_mode or args.recalculate_pos)
             if use_end_col: end_raw = work_df['end'].astype(int)
+            
             if args.input_system == 'bed':
                 start_1based = start_raw + 1
                 if use_end_col: end_1based = end_raw
             else:
                 start_1based = start_raw
                 if use_end_col: end_1based = end_raw
+            
             if use_end_col and (start_1based > end_1based).any():
                 swap_mask = start_1based > end_1based
                 start_1based[swap_mask], end_1based[swap_mask] = end_1based[swap_mask], start_1based[swap_mask]
+            
             if args.recalculate_pos:
                 midpoint = (start_1based + end_1based) // 2
                 bed_start, bed_end = midpoint - 1, midpoint
             elif args.single_base_mode:
                 bed_start, bed_end = start_1based - 1, start_1based
-            else:
+            else: # 默认模式
                 bed_start, bed_end = start_1based - 1, end_1based
+                
         work_df['bed_start'], work_df['bed_end'] = bed_start, bed_end
         
         # ### V2.1 变更: 仅在非tensorQTL模式下处理链信息 ###
-        # 注意: 即使在tensorQTL模式下，此代码块也会运行，但其结果'strand'列不会被使用
         if args.use_strand:
             if strand_info: work_df['strand'] = work_df['gene_id_clean'].map(strand_info).fillna(self.default_strand)
             else: work_df['strand'] = self.default_strand
@@ -335,24 +355,48 @@ class MoleculePhenotypeConverterV2_1:
             header_arg = 'infer' if not args.no_header_main else None
             col_map, _ = self._get_col_map(args, 'main', args.no_header_main)
             all_file_cols = pd.read_csv(args.input, sep=sep, header=header_arg, nrows=0, comment='#').columns
-            meta_cols = list(col_map.keys())
-            sample_cols = [c for c in all_file_cols if c not in meta_cols]
+            
+            # ### V2.2 更新：实现 --ignore-cols 和 --main-strand-col 逻辑 ###
+            meta_cols_keys = set(col_map.keys())
+            cols_to_exclude = set(meta_cols_keys) # 1. 排除所有元数据列
+
+            # 2. 排除用户通过 --ignore-cols 指定的列
+            if args.ignore_cols:
+                user_ignored_list = [col.strip() for col in args.ignore_cols.split(',')]
+                if args.no_header_main:
+                    # 在 no-header 模式下, user_ignored_list 是 ["3", "5"], 需转为 0-based 索引 [2, 4]
+                    try:
+                        user_ignored_indices = {int(col_str) - 1 for col_str in user_ignored_list}
+                        self.logger.info(f"将忽略用户指定的列号 (1-based): {user_ignored_list}")
+                        cols_to_exclude.update(user_ignored_indices)
+                    except ValueError:
+                        # 此错误应在 validate_args 中被捕获, 此处作为双重保险
+                        self.logger.error(f"使用 --no-header-main 时, --ignore-cols 必须是逗号分隔的数字列号。收到: {args.ignore_cols}")
+                        return False
+                else:
+                    # 在 header 模式下, user_ignored_list 是 ["name1", "name2"]
+                    self.logger.info(f"将忽略用户指定的列名: {user_ignored_list}")
+                    cols_to_exclude.update(user_ignored_list)
+
+            # 3. 排除主文件中的链信息列 (如果指定了)
             if args.main_strand_col:
                 if args.no_header_main:
-                    strand_col_idx = int(args.main_strand_col) - 1
-                    if strand_col_idx < len(all_file_cols):
-                        strand_col_name = all_file_cols[strand_col_idx]
-                        if strand_col_name in sample_cols:
-                            sample_cols.remove(strand_col_name)
-                            self.logger.info(f"已从样本列中排除指定的链信息列: (列号 {args.main_strand_col})")
+                    strand_col_idx = int(args.main_strand_col) - 1 # 转为 0-based 索引
+                    cols_to_exclude.add(strand_col_idx)
+                    self.logger.info(f"已将主文件中的链信息列(列号 {args.main_strand_col})添加到排除列表。")
                 else:
-                    if args.main_strand_col in sample_cols:
-                        sample_cols.remove(args.main_strand_col)
-                        self.logger.info(f"已从样本列中排除指定的链信息列: '{args.main_strand_col}'")
+                    cols_to_exclude.add(args.main_strand_col) # 列名
+                    self.logger.info(f"已将主文件中的链信息列('{args.main_strand_col}')添加到排除列表。")
+            
+            # 样本列 = 所有列 - 所有要排除的列
+            sample_cols = [c for c in all_file_cols if c not in cols_to_exclude]
+            # ### V2.2 逻辑更新结束 ###
+            
             self.logger.info(f"检测到 {len(sample_cols)} 个样本列。")
             if not sample_cols:
-                self.logger.error("未能检测到任何样本列，请检查列名或列号指定是否正确。")
+                self.logger.error("未能检测到任何样本列，请检查列名/列号指定以及 --ignore-cols 参数是否正确。")
                 return False
+                
             reader = pd.read_csv(args.input, sep=sep, header=header_arg, dtype=str, na_filter=False, chunksize=CHUNK_SIZE, comment='#')
             is_first_chunk, total_rows_processed = True, 0
             for i, chunk_df in enumerate(reader):
@@ -416,7 +460,9 @@ class MoleculePhenotypeConverterV2_1:
             if args.loop_mode: cols.update({'a1_start': args.anchor1_start, 'a1_end': args.anchor1_end, 'a2_start': args.anchor2_start, 'a2_end': args.anchor2_end})
             else:
                 cols['start'] = args.start
-                if not args.single_base_mode or args.recalculate_pos: cols['end'] = args.end
+                # V2.2 更新: keep_coords_mode 也需要 end 列
+                if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode: 
+                    cols['end'] = args.end
         elif file_type == 'main':
             cols = {'gene_id': args.gene_id}
         elif file_type == 'pos':
@@ -424,7 +470,9 @@ class MoleculePhenotypeConverterV2_1:
             if args.loop_mode: cols.update({'a1_start': args.pos_anchor1_start_col, 'a1_end': args.pos_anchor1_end_col, 'a2_start': args.pos_anchor2_start_col, 'a2_end': args.pos_anchor2_end_col})
             else:
                 cols['start'] = args.pos_start_col
-                if not args.single_base_mode or args.recalculate_pos: cols['end'] = args.pos_end_col
+                # V2.2 更新: keep_coords_mode 也需要 end 列
+                if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode: 
+                    cols['end'] = args.pos_end_col
         cols = {k: v for k, v in cols.items() if v is not None}
         col_map = {int(v) - 1: k for k, v in cols.items()} if no_header else {v: k for k, v in cols.items()}
         display_cols = ", ".join([f"{k}='{v}'" for k, v in cols.items()])
@@ -480,8 +528,8 @@ class MoleculePhenotypeConverterV2_1:
         return df
 
 def parse_args():
-    ### V2.1 更新: 修改描述信息 ###
-    parser = argparse.ArgumentParser(description='分子表型格式转换为QTLtools/tensorQTL标准BED格式的工具 (V2.1)', formatter_class=argparse.RawTextHelpFormatter)
+    ### V2.2 更新: 修改描述信息 ###
+    parser = argparse.ArgumentParser(description='分子表型格式转换为QTLtools/tensorQTL标准BED格式的工具 (V2.2)', formatter_class=argparse.RawTextHelpFormatter)
     req_group = parser.add_argument_group('输入/输出 (必选)')
     req_group.add_argument('-i', '--input', required=True, help='输入的分子表型数据文件')
     req_group.add_argument('-o', '--output', required=True, help='最终输出文件的前缀')
@@ -514,23 +562,26 @@ def parse_args():
     header_group.add_argument('--no-header-pos', action='store_true', help='位置信息文件无标题行。列名参数需提供列号(1-based)。')
     header_group.add_argument('--no-header-strand', action='store_true', help='链信息文件无标题行。列名参数需提供列号(1-based)。')
     header_group.add_argument('--main-strand-col', help='(可选) 主数据文件中包含的链信息列名/列号, 指定后此列将被忽略。')
+    ### V2.2 新增 ###
+    header_group.add_argument('--ignore-cols', help='(V2.2 新增) 指定要忽略的列名(或列号,逗号分隔), 这些列将被完全跳过读取。')
     
     transform_group = parser.add_argument_group('表型数据转换')
     transform_group.add_argument('--transform', choices=['none', 'log2', 'zscore', 'rint'], default='none', help="对每个表型(行)的数据进行转换 (默认: none)")
     transform_group.add_argument('--rint-stochastic', action='store_true', help="当使用 'rint' 转换时, 启用随机排序处理ties (默认不启用)")
     
-    ### V2.1 更新：添加新的输出格式控制参数组 ###
-    output_format_group = parser.add_argument_group('输出格式控制 (V2.1 新增)')
-    output_format_group.add_argument('--tensortqtl-mode', action='store_true', help='启用 tensorQTL 兼容模式 (输出列: #chr, start, end, targetID)')
+    output_format_group = parser.add_argument_group('输出格式控制')
+    output_format_group.add_argument('--tensortqtl-mode', action='store_true', help='(V2.1) 启用 tensorQTL 兼容模式 (输出列: #chr, start, end, targetID)')
 
     behavior_group = parser.add_argument_group('格式与行为控制 (通用)')
-    behavior_group.add_argument('--input-system', choices=['bed', '1-based'], default='bed', help="输入坐标系统 (默认: bed)")
+    behavior_group.add_argument('--input-system', choices=['bed', '1-based'], default='bed', help="输入坐标系统 (默认: bed)。当使用 --keep-coords-mode 时此参数无效。")
     behavior_group.add_argument('--default-strand', choices=['+', '-', '.'], default='+', help='默认链信息 (默认: +)')
     behavior_group.add_argument('--separator', help='手动指定输入文件的列分隔符')
     mode_group = behavior_group.add_mutually_exclusive_group()
-    mode_group.add_argument('--loop-mode', action='store_true', help='染色质环模式')
-    mode_group.add_argument('--recalculate-pos', action='store_true', help='中点模式')
-    mode_group.add_argument('--single-base-mode', action='store_true', help='单碱基模式')
+    mode_group.add_argument('--loop-mode', action='store_true', help='染色质环模式 (计算中点)')
+    mode_group.add_argument('--recalculate-pos', action='store_true', help='中点模式 (计算start/end的中点)')
+    mode_group.add_argument('--single-base-mode', action='store_true', help='单碱基模式 (仅使用start坐标)')
+    ### V2.2 新增 ###
+    mode_group.add_argument('--keep-coords-mode', action='store_true', help='(V2.2)坐标维持模式: 假定输入Start/End已为0-based BED格式, 直接原样输出。')
     
     strand_group = parser.add_argument_group('链信息 (可选, 非tensorQTL模式下生效)')
     strand_group.add_argument('--use-strand', action='store_true', help='启用链信息处理')
@@ -556,9 +607,20 @@ def validate_args(args):
                 main_cols.update({'anchor1-start': args.anchor1_start, 'anchor1-end': args.anchor1_end, 'anchor2-start': args.anchor2_start, 'anchor2-end': args.anchor2_end})
             else:
                 main_cols.update({'start': args.start})
-                if not args.single_base_mode or args.recalculate_pos: main_cols['end'] = args.end
+                # V2.2 更新: keep_coords_mode 也需要 end 列
+                if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode:
+                    main_cols['end'] = args.end
         if not all(is_int(v) for v in main_cols.values()):
             return False, "使用 --no-header-main 时,所有主文件相关列参数必须是数字列号"
+        
+        # V2.2 新增: 验证 --ignore-cols 在 no-header 模式下是否为数字
+        if args.ignore_cols:
+            try:
+                ignored_list = [col.strip() for col in args.ignore_cols.split(',')]
+                for col_str in ignored_list:
+                    int(col_str) # 测试是否能转换为整数
+            except ValueError:
+                return False, f"使用 --no-header-main 时, --ignore-cols 必须是逗号分隔的数字列号。收到: {args.ignore_cols}"
 
     if args.position_file:
         if not Path(args.position_file).exists(): return False, f"位置信息文件不存在: {args.position_file}"
@@ -567,7 +629,8 @@ def validate_args(args):
             pos_cols.update({'pos_anchor1_start_col': args.pos_anchor1_start_col, 'pos_anchor1_end_col': args.pos_anchor1_end_col, 'pos_anchor2_start_col': args.pos_anchor2_start_col, 'pos_anchor2_end_col': args.pos_anchor2_end_col})
         else:
             pos_cols.update({'pos_start_col': args.pos_start_col})
-            if not args.single_base_mode or args.recalculate_pos:
+            # V2.2 更新: keep_coords_mode 也需要 end 列
+            if (not args.single_base_mode or args.recalculate_pos) or args.keep_coords_mode:
                 pos_cols['pos_end_col'] = args.pos_end_col
         if not all(pos_cols.values()):
             return False, "在 --position-file 模式下, 必须指定所有必需的 pos_* 列"
@@ -594,11 +657,20 @@ def main():
     temp_unsorted_path = Path(f"{output_prefix}.unsorted.tmp.bed")
     temp_unsorted_path.parent.mkdir(parents=True, exist_ok=True)
     
-    ### V2.1 更新: 实例化新类 ###
-    converter = MoleculePhenotypeConverterV2_1(output_prefix, args.default_strand, args.transform, args.rint_stochastic)
-    converter.logger.info("分子表型格式转换工具启动 (V2.1)")
+    ### V2.2 更新: 实例化新类 ###
+    converter = MoleculePhenotypeConverterV2_2(output_prefix, args.default_strand, args.transform, args.rint_stochastic)
+    converter.logger.info("分子表型格式转换工具启动 (V2.2)")
+    
     if args.tensortqtl_mode:
         converter.logger.info("已启用 tensorQTL 兼容模式。")
+        
+    if args.keep_coords_mode:
+        converter.logger.info("已启用坐标维持模式 (--keep-coords-mode)，将假定输入坐标为0-based BED格式并原样输出。")
+        # ### 新增的UX警告 (基于您的评估建议) ###
+        if args.input_system != 'bed': # 默认值是 'bed'。如果用户显式设置了 '1-based'
+             converter.logger.warning(f"检测到 --keep-coords-mode 与 --input-system={args.input_system} 同时使用。")
+             converter.logger.warning("在坐标维持模式下, --input-system 参数将被忽略，坐标将按原样输出。")
+             
     converter.logger.info(f"运行参数: {' '.join(sys.argv[1:])}")
     
     try:
