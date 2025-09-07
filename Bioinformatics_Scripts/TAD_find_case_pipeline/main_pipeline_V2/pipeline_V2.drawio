@@ -1,0 +1,176 @@
+<mxfile host="65bd71144e">
+    <diagram id="f7uFfWL-HtJLG8_8wr81" name="第 1 页">
+        <mxGraphModel dx="1129" dy="980" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3000" pageHeight="3000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="122" value="" style="group" vertex="1" connectable="0" parent="1">
+                    <mxGeometry x="210" y="400" width="1190" height="1400" as="geometry"/>
+                </mxCell>
+                <mxCell id="21" style="edgeStyle=none;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" edge="1" parent="122" source="2" target="3">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="2" value="形成三元组" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="60" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="22" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="3" target="4">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="3" value="输入三元组" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="499" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="23" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="122" source="4" target="5">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" value="提取三元组中唯一的SNP" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="499" y="90" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="24" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="5" target="6">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="5" value="形成一个这些唯一SNP的0/1/2矩阵文件" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="499" y="190" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="25" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="6" target="7">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="26" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="6" target="8">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="27" style="edgeStyle=none;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="6" target="9">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="6" value="根据SNP的0/2进行分型，进行分析" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="499" y="280" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="28" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="7" target="10">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="7" value="TAD的IS的秩和检验" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="430" y="390" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="29" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="8" target="10">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="8" value="基因表达的秩和检验" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="580" y="390" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="9" value="TAD的0-1的卡方检验&lt;div&gt;（这个只是输出，不作为过滤标准）&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="250" y="390" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="30" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="10" target="13">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="10" value="上述二者同时满足显著，进行下一步&lt;div&gt;（这里先不注意方向）&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="500" y="490" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="31" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="13" target="14">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="13" value="计算距离" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="500" y="580" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="33" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="14" target="15">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="52" value="满足距离条件1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="33">
+                    <mxGeometry x="-0.0205" y="1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="53" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="14" target="16">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="54" value="不满足距离条件1" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="53">
+                    <mxGeometry x="-0.0155" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="14" value="TAD与Gene距离满足条件1&lt;div&gt;（基因在边界80kb内）&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="499" y="685" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="66" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="15" target="43">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="15" value="判断IS和表达的方向&lt;div&gt;（IS低，TPM高&lt;/div&gt;&lt;div&gt;反向）&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="410" y="820" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="45" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="16" target="17">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="55" value="满足距离条件2" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="45">
+                    <mxGeometry x="0.0377" y="2" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="16" value="TAD与Gene距离满足条件2&lt;div&gt;（基因在边界80kb外，但在250kb内）&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="590" y="820" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="46" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="17" target="42">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="56" value="存在满足条件的Loop" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="46">
+                    <mxGeometry x="-0.0758" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="17" value="是否有满足条件的Loop存在" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="590" y="970" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="35" style="edgeStyle=none;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="122" source="34" target="14">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="34" value="此处距离计算方式：&lt;div&gt;&lt;font color=&quot;#000000&quot;&gt;先形成TAD的范围，如下：&lt;br&gt;&lt;/font&gt;&lt;div&gt;[TAD_start-80kb, TAD_end+80kb]&lt;br&gt;然后判断基因的[start,end]&lt;br&gt;这两个范围只要有1bp的重叠，就纳入&lt;/div&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry y="670" width="230" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="41" style="edgeStyle=none;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="122" source="40" target="15">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="40" value="此处方向判断方式：&lt;div&gt;使用中位数&lt;/div&gt;&lt;div&gt;例如：基因型0的IS的中位数低，则TPM中位数高&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="5" y="820" width="230" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="65" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="122" source="42" target="64">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="69" value="Loop的秩和/卡方，任意1个显著的就往下进行方向判断" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];" vertex="1" connectable="0" parent="65">
+                    <mxGeometry x="-0.1067" y="-2" relative="1" as="geometry">
+                        <mxPoint x="2" y="-2" as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="42" value="Loop强度的秩和检验&lt;div&gt;和&lt;/div&gt;&lt;div&gt;Loop有无的卡方检验&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="590" y="1110" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="43" value="结果" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="410" y="1340" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="60" style="edgeStyle=none;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" edge="1" parent="122" source="51" target="16">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="51" value="此处距离计算方式：&lt;div&gt;&lt;font color=&quot;#000000&quot;&gt;先形成TAD的范围，如下：&lt;br&gt;&lt;/font&gt;&lt;div&gt;[TAD_start-250kb, TAD_end+250kb]&lt;br&gt;然后判断基因的[start,end]&lt;br&gt;这两个范围只要有1bp的重叠，就纳入&lt;/div&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="880" y="805" width="230" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="63" style="edgeStyle=none;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="122" source="61" target="17">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="61" value="此处满足条件的Loop寻找策略：&lt;div&gt;①在基因的上下游寻找anchor_gene，这里使用40kb的范围（之后人工筛，我不清楚多少合适）；&lt;/div&gt;&lt;div&gt;即[Gene_start-40kb,Gene_end+40kb]和[anchor_start,anchor_end]只要有任何1bp重叠；&lt;/div&gt;&lt;div&gt;②在边界另一侧的250kb内，寻找anchor_TAD；距离计算同上&lt;/div&gt;&lt;div&gt;③查询loop位置表，分析anchor_gene和anchor_TAD是否可以形成loop，可以的话，匹配Loop_ID&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="830" y="927.5" width="360" height="145" as="geometry"/>
+                </mxCell>
+                <mxCell id="67" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="122" source="64" target="43">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="64" value="判断基因表达、Loop、TAD的方向" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="590" y="1220" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="71" style="edgeStyle=none;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="122" source="70" target="64">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="70" value="先判断IS低，TPM低&lt;div&gt;再判断Loop低/消失&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="122">
+                    <mxGeometry x="910" y="1220" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="123" value="版本1：符合师兄的分类情况的Pipeline；&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;但是我感觉不太自由，不太通用&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+                    <mxGeometry x="410" y="290" width="340" height="60" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
