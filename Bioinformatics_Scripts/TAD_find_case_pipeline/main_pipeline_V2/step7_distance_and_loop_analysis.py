@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-SNP-TAD-Gene Analysis Core (v5) - Statistically Rigorous Version
-Author: Based on user requirements  
+SNP-TAD-Gene Analysis Core (v5.5) - Statistically Rigorous Quadruplet Strategy
+Author: Based on user requirements
 Date: 2025
-Version: 5.0.0
+Version: 5.5.0
 
 严谨的统计分析流程：
-1. 分支1：基因在TAD临界距离内，检查TAD IS与基因表达的反向关联
-2. 分支2：基因在TAD临界距离外，需要Loop介导，检查所有指标的一致性
+1. 分支1：基因在TAD临界距离内 (三元组分析)。
+2. 分支2：基因在TAD临界距离外 (四元组分析)。
+   策略 (v5.2): 查找所有匹配的Loop。对每一个 (SNP, TAD, Gene, Loop) 组合（四元组）
+                 进行独立和完整的统计分析，并为每一个通过的四元组输出单独一行。
+   v5.3 修复: 修正了 check_overlap 的边界排斥问题 (<=)。
+   v5.4 优化: 修复了 TypeError 并重写了日志报告。
+    v5.5 修复: (关键Bug修复) 修正了 find_all_overlapping_loops... 函数中键名大小写不匹配的问题。
+               此Bug曾导致 Loop_ID, Loop_Match_Type 等所有Loop物理信息在输出CSV中显示为NaN。
 """
 
 import pandas as pd
@@ -23,15 +29,15 @@ from tqdm import tqdm
 import warnings
 
 # 抑制统计计算中的数值警告
-warnings.filterwarnings("ignore", category=RuntimeWarning, 
-                       message=r"divide by zero encountered|invalid value encountered")
+warnings.filterwarnings("ignore", category=RuntimeWarning,
+                        message=r"divide by zero encountered|invalid value encountered")
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # --------------------------------------------------------------------------
 # --- 命令行参数解析 ---
 # --------------------------------------------------------------------------
 def parse_args():
-    parser = ArgumentParser(description="基于TAD-基因距离和方向性规则的严谨统计分析")
+    parser = ArgumentParser(description="基于TAD-基因距离和方向性规则的严谨统计分析 (v5.5 - 四元组策略 + Bug修复)")
     
     # 必选参数
     parser.add_argument("triplets_with_positions", help="包含位置信息的三元组文件")
@@ -46,15 +52,15 @@ def parse_args():
     
     # 可选参数
     parser.add_argument("--distance_threshold", type=int, default=80,
-                       help="分支临界距离 (kb，默认80)")
+                        help="分支临界距离 (kb，默认80)")
     parser.add_argument("--max_distance", type=int, default=250,
-                       help="分支2最远距离 (kb，默认250)")
+                        help="分支2最远距离 (kb，默认250)")
     parser.add_argument("--gene_anchor_distance", type=int, default=40,
-                       help="基因anchor扩展距离 (kb，默认40)")
+                        help="基因anchor扩展距离 (kb，默认40)")
     parser.add_argument("--loop_p_threshold", type=float, default=0.05,
-                       help="Loop显著性p值阈值 (默认0.05)")
-    parser.add_argument("--output_dir", type=str, default="analysis_output_v5",
-                       help="输出文件夹路径 (默认: analysis_output_v5)")
+                        help="Loop显著性p值阈值 (默认0.05, 独立应用于每个Loop)")
+    parser.add_argument("--output_dir", type=str, default="analysis_output_v5_5_quadruplets",
+                        help="输出文件夹路径 (默认: analysis_output_v5_5_quadruplets)")
     
     return parser.parse_args()
 
@@ -75,11 +81,11 @@ class Config:
 _G = {}
 
 # --------------------------------------------------------------------------
-# --- 核心计算函数 ---
+# --- 核心计算函数 (v5.3 修复版) ---
 # --------------------------------------------------------------------------
 def calculate_distance(start1, end1, start2, end2):
     """计算两个区间的最短距离"""
-    if max(start1, start2) < min(end1, end2):
+    if max(start1, start2) < min(end1, end2): 
         return 0  # 重叠
     return min(abs(start1 - end2), abs(end1 - start2))
 
@@ -94,13 +100,15 @@ def calculate_gene_tad_distance_and_relation(gene_start, gene_end, tad_start, ta
     elif gene_start > tad_end:
         relation = "TAD下游"
     else:
-        relation = "部分重叠"
+        relation = "部分重叠" 
     
     return distance, relation
 
 def check_overlap(start1, end1, start2, end2):
-    """检查两个区间是否重叠"""
-    return max(start1, start2) < min(end1, end2)
+    """
+    检查两个区间是否重叠 (v5.3 MODIFIED: 端点包容)
+    """
+    return max(start1, start2) <= min(end1, end2)
 
 def determine_gene_tad_spatial_relationship(gene_start, gene_end, tad_start, tad_end):
     """确定基因相对于TAD的空间关系"""
@@ -109,7 +117,7 @@ def determine_gene_tad_spatial_relationship(gene_start, gene_end, tad_start, tad
     elif gene_start > tad_end:
         return "downstream"
     else:
-        return "overlap"
+        return "overlap" 
 
 # --------------------------------------------------------------------------
 # --- 严谨的统计检验函数 ---
@@ -117,73 +125,24 @@ def determine_gene_tad_spatial_relationship(gene_start, gene_end, tad_start, tad
 def perform_mannwhitney_test(data, value_col, group_col):
     """
     严谨的Mann-Whitney U检验实现
-    
-    特点：
-    - 成对删除缺失值
-    - 严格的样本量检查
-    - 双侧检验
-    - 完整的诊断信息
     """
     try:
-        # 成对删除策略
         sub = data[[value_col, group_col]].dropna()
-        
-        # 最小样本量和分组检查
         if len(sub) < 3:
-            return {
-                "p_value": np.nan,
-                "stat": np.nan,
-                "group0_size": 0,
-                "group2_size": 0,
-                "group0_median": np.nan,
-                "group2_median": np.nan,
-                "total_samples": len(sub),
-                "error": "Insufficient total sample size"
-            }
-        
+            return {"p_value": np.nan, "stat": np.nan, "group0_size": 0, "group2_size": 0, "group0_median": np.nan, "group2_median": np.nan, "error": "Insufficient total sample size"}
         if sub[group_col].nunique() < 2:
-            return {
-                "p_value": np.nan,
-                "stat": np.nan,
-                "group0_size": 0,
-                "group2_size": 0,
-                "group0_median": np.nan,
-                "group2_median": np.nan,
-                "total_samples": len(sub),
-                "error": "Less than 2 groups available"
-            }
+            return {"p_value": np.nan, "stat": np.nan, "group0_size": 0, "group2_size": 0, "group0_median": np.nan, "group2_median": np.nan, "error": "Less than 2 groups available"}
         
-        # 分组数据
         groups = sorted(sub[group_col].unique())
         if len(groups) != 2 or groups != [0, 2]:
-            return {
-                "p_value": np.nan,
-                "stat": np.nan,
-                "group0_size": 0,
-                "group2_size": 0,
-                "group0_median": np.nan,
-                "group2_median": np.nan,
-                "total_samples": len(sub),
-                "error": f"Unexpected groups: {groups}"
-            }
+            return {"p_value": np.nan, "stat": np.nan, "group0_size": 0, "group2_size": 0, "group0_median": np.nan, "group2_median": np.nan, "error": f"Unexpected groups: {groups}"}
         
         g0 = sub[sub[group_col] == 0][value_col]
         g2 = sub[sub[group_col] == 2][value_col]
         
-        # 每组至少需要1个样本
         if len(g0) == 0 or len(g2) == 0:
-            return {
-                "p_value": np.nan,
-                "stat": np.nan,
-                "group0_size": len(g0),
-                "group2_size": len(g2),
-                "group0_median": float(g0.median()) if len(g0) > 0 else np.nan,
-                "group2_median": float(g2.median()) if len(g2) > 0 else np.nan,
-                "total_samples": len(sub),
-                "error": "Empty group(s)"
-            }
+            return {"p_value": np.nan, "stat": np.nan, "group0_size": len(g0), "group2_size": len(g2), "group0_median": float(g0.median()) if len(g0) > 0 else np.nan, "group2_median": float(g2.median()) if len(g2) > 0 else np.nan, "error": "Empty group(s)"}
         
-        # 执行双侧Mann-Whitney U检验
         stat, p_value = mannwhitneyu(g0, g2, alternative='two-sided')
         
         return {
@@ -193,28 +152,14 @@ def perform_mannwhitney_test(data, value_col, group_col):
             "group2_size": len(g2),
             "group0_median": float(g0.median()),
             "group2_median": float(g2.median()),
-            "total_samples": len(sub)
         }
-        
     except Exception as e:
-        return {
-            "p_value": np.nan,
-            "stat": np.nan,
-            "group0_size": 0,
-            "group2_size": 0,
-            "group0_median": np.nan,
-            "group2_median": np.nan,
-            "total_samples": 0,
-            "error": f"Mann-Whitney test failed: {str(e)}"
-        }
+        return {"p_value": np.nan, "stat": np.nan, "group0_size": 0, "group2_size": 0, "group0_median": np.nan, "group2_median": np.nan, "error": f"Mann-Whitney test failed: {str(e)}"}
 
 def _prepare_2x2_contingency_table(sub, categorical_col, group_col):
     """预处理2x2列联表并检查退化情况"""
     ct = pd.crosstab(sub[categorical_col], sub[group_col])
-    # 强制标准2x2格式
     ct = ct.reindex(index=[0, 1], columns=[0, 2], fill_value=0)
-    
-    # 检查退化：任何行或列边际为0
     if (ct.sum(axis=1) == 0).any() or (ct.sum(axis=0) == 0).any():
         return None
     return ct
@@ -222,70 +167,35 @@ def _prepare_2x2_contingency_table(sub, categorical_col, group_col):
 def perform_independence_test(data, categorical_col, group_col):
     """
     严谨的2x2独立性检验
-    
-    特点：
-    - 科学的期望频数规则
-    - Fisher vs 卡方的自适应选择
-    - 详细的诊断信息
-    - 完善的异常处理
     """
     try:
-        # 成对删除缺失值
         sub = data[[categorical_col, group_col]].dropna()
-        
-        # 最小样本量检查
         if len(sub) < 4:
-            return {
-                "p_value": np.nan,
-                "test_used": "none",
-                "reason": "insufficient_data",
-                "sample_size": len(sub),
-                "expected_min": np.nan,
-                "expected_max": np.nan,
-                "error": "Less than 4 observations for 2x2 table"
-            }
+            return {"p_value": np.nan, "test_used": "none", "reason": "insufficient_data", "sample_size": len(sub), "expected_min": np.nan, "error": "Less than 4 observations"}
         
-        # 准备2x2列联表
         ct = _prepare_2x2_contingency_table(sub, categorical_col, group_col)
         if ct is None:
-            return {
-                "p_value": np.nan,
-                "test_used": "none",
-                "reason": "degenerate_table",
-                "sample_size": len(sub),
-                "expected_min": np.nan,
-                "expected_max": np.nan,
-                "error": "Empty row or column in contingency table"
-            }
+            return {"p_value": np.nan, "test_used": "none", "reason": "degenerate_table", "sample_size": len(sub), "expected_min": np.nan, "error": "Empty row or column"}
         
         table = ct.values
         total_n = int(table.sum())
-        
-        # 计算期望频数
         _, _, _, expected = chi2_contingency(table, correction=True)
         expected = np.asarray(expected)
-        
         expected_min = float(expected.min())
-        expected_max = float(expected.max())
         n_cells_lt1 = int((expected < 1).sum())
         n_cells_lt5 = int((expected < 5).sum())
         
-        # 严格的检验选择规则
         if n_cells_lt1 > 0 or n_cells_lt5 > 0:
-            # 使用Fisher精确检验
             _, p_fisher = fisher_exact(table, alternative="two-sided")
             return {
                 "p_value": float(p_fisher),
                 "test_used": "fisher_exact",
-                "reason": f"expected_min={expected_min:.3f}_cells_lt1={n_cells_lt1}_cells_lt5={n_cells_lt5}",
+                "reason": f"expected_min={expected_min:.3f}_cells_lt5={n_cells_lt5}",
                 "sample_size": total_n,
                 "expected_min": expected_min,
-                "expected_max": expected_max,
                 "contingency_table": table.tolist(),
-                "expected_frequencies": expected.tolist()
             }
         else:
-            # 使用Pearson卡方检验（不使用Yates校正）
             chi2_stat, p_chi2, dof, _ = chi2_contingency(table, correction=False)
             return {
                 "p_value": float(p_chi2),
@@ -293,105 +203,70 @@ def perform_independence_test(data, categorical_col, group_col):
                 "reason": f"expected_min={expected_min:.3f}_all_ge5",
                 "sample_size": total_n,
                 "chi2_stat": float(chi2_stat),
-                "degrees_of_freedom": int(dof),
                 "expected_min": expected_min,
-                "expected_max": expected_max,
                 "contingency_table": table.tolist(),
-                "expected_frequencies": expected.tolist()
             }
-            
     except Exception as e:
-        return {
-            "p_value": np.nan,
-            "test_used": "error",
-            "reason": "unexpected_error",
-            "sample_size": 0,
-            "expected_min": np.nan,
-            "expected_max": np.nan,
-            "error": f"Independence test failed: {str(e)}"
-        }
+        return {"p_value": np.nan, "test_used": "error", "reason": "unexpected_error", "sample_size": 0, "expected_min": np.nan, "error": f"Independence test failed: {str(e)}"}
 
 # --------------------------------------------------------------------------
-# --- Loop搜索函数 ---
+# --- Loop搜索函数 (v5.5 KEY FIX) ---
 # --------------------------------------------------------------------------
-def find_overlapping_loop_for_branch2(gene_start, gene_end, tad_start, tad_end):
+def find_all_overlapping_loops_for_branch2(gene_start, gene_end, tad_start, tad_end):
     """
-    为分支2寻找合适的Loop
+    为分支2寻找 *所有* 合适的Loop (v5.5 修复: 字典键名必须与 initialize_stats_dict 一致)
+    """
+    found_loops_list = []
     
-    逻辑：
-    1. 基因anchor：基因 ± gene_anchor_distance
-    2. TAD anchor：根据基因位置确定对侧搜索范围
-    3. 寻找两个anchor分别重叠的Loop
-    """
     try:
-        # 基因anchor范围
         gene_anchor_start = gene_start - Config.GENE_ANCHOR_DISTANCE_KB * 1000
         gene_anchor_end = gene_end + Config.GENE_ANCHOR_DISTANCE_KB * 1000
-        
-        # 确定基因位置
         gene_position = determine_gene_tad_spatial_relationship(gene_start, gene_end, tad_start, tad_end)
         
         if gene_position == "upstream":
-            # 基因在TAD上游，TAD anchor在TAD下游搜索
             tad_anchor_start = tad_end
             tad_anchor_end = tad_end + Config.MAX_DISTANCE_KB * 1000
             tad_anchor_side = "downstream"
         elif gene_position == "downstream":
-            # 基因在TAD下游，TAD anchor在TAD上游+内部搜索
             tad_anchor_start = tad_start - Config.MAX_DISTANCE_KB * 1000
             tad_anchor_end = tad_end
             tad_anchor_side = "upstream_and_internal"
         else:
-            return {"error": "Gene overlaps with TAD in Branch 2"}
+            return [] 
 
-        # 搜索匹配的Loop
         for loop_id, loop_row in _G['loop_pos_df'].iterrows():
-            # 情况1：anchor1与基因重叠，anchor2与TAD重叠
-            anchor1_gene_overlap = check_overlap(gene_anchor_start, gene_anchor_end,
-                                                  loop_row['start1'], loop_row['end1'])
-            anchor2_tad_overlap = check_overlap(tad_anchor_start, tad_anchor_end,
-                                               loop_row['start2'], loop_row['end2'])
+            anchor1_gene_overlap = check_overlap(gene_anchor_start, gene_anchor_end, loop_row['start1'], loop_row['end1'])
+            anchor2_tad_overlap = check_overlap(tad_anchor_start, tad_anchor_end, loop_row['start2'], loop_row['end2'])
+            anchor2_gene_overlap = check_overlap(gene_anchor_start, gene_anchor_end, loop_row['start2'], loop_row['end2'])
+            anchor1_tad_overlap = check_overlap(tad_anchor_start, tad_anchor_end, loop_row['start1'], loop_row['end1'])
 
-            # 情况2：anchor2与基因重叠，anchor1与TAD重叠
-            anchor2_gene_overlap = check_overlap(gene_anchor_start, gene_anchor_end,
-                                                  loop_row['start2'], loop_row['end2'])
-            anchor1_tad_overlap = check_overlap(tad_anchor_start, tad_anchor_end,
-                                               loop_row['start1'], loop_row['end1'])
+            # (v5.5 修复: 所有的键都必须与 initialize_stats_dict 中的键名(大写开头)完全匹配)
+            loop_match_data = {
+                "Loop_ID": loop_id,
+                "Gene_Anchor_Start": gene_anchor_start,
+                "Gene_Anchor_End": gene_anchor_end,
+                "TAD_Anchor_Start": tad_anchor_start,
+                "TAD_Anchor_End": tad_anchor_end,
+                "Gene_Position": gene_position,
+                "TAD_Anchor_Side": tad_anchor_side,
+                "Loop_Anchor1_Start": loop_row['start1'],
+                "Loop_Anchor1_End": loop_row['end1'],
+                "Loop_Anchor2_Start": loop_row['start2'],
+                "Loop_Anchor2_End": loop_row['end2'],
+            }
 
             if anchor1_gene_overlap and anchor2_tad_overlap:
-                return {
-                    "loop_id": loop_id,
-                    "gene_anchor_start": gene_anchor_start,
-                    "gene_anchor_end": gene_anchor_end,
-                    "tad_anchor_start": tad_anchor_start,
-                    "tad_anchor_end": tad_anchor_end,
-                    "gene_position": gene_position,
-                    "tad_anchor_side": tad_anchor_side,
-                    "loop_anchor1_start": loop_row['start1'],
-                    "loop_anchor1_end": loop_row['end1'],
-                    "loop_anchor2_start": loop_row['start2'],
-                    "loop_anchor2_end": loop_row['end2'],
-                    "match_type": "anchor1_gene_anchor2_tad"
-                }
+                loop_match_data["Loop_Match_Type"] = "anchor1_gene_anchor2_tad" # (v5.5 修复)
+                found_loops_list.append(loop_match_data)
             elif anchor2_gene_overlap and anchor1_tad_overlap:
-                return {
-                    "loop_id": loop_id,
-                    "gene_anchor_start": gene_anchor_start,
-                    "gene_anchor_end": gene_anchor_end,
-                    "tad_anchor_start": tad_anchor_start,
-                    "tad_anchor_end": tad_anchor_end,
-                    "gene_position": gene_position,
-                    "tad_anchor_side": tad_anchor_side,
-                    "loop_anchor1_start": loop_row['start1'],
-                    "loop_anchor1_end": loop_row['end1'],
-                    "loop_anchor2_start": loop_row['start2'],
-                    "loop_anchor2_end": loop_row['end2'],
-                    "match_type": "anchor2_gene_anchor1_tad"
-                }
+                loop_match_data["Loop_Match_Type"] = "anchor2_gene_anchor1_tad" # (v5.5 修复)
+                found_loops_list.append(loop_match_data)
         
-        return None
+        return found_loops_list
+    
     except Exception as e:
-        return {"error": str(e)}
+        print(f"Loop search warning: {e}", file=sys.stderr)
+        return []
 
 # --------------------------------------------------------------------------
 # --- 方向性检验函数 ---
@@ -400,28 +275,24 @@ def check_branch1_directionality(tad_is_median_0, tad_is_median_2, gene_exp_medi
     """
     分支1方向性检验：TAD IS与基因表达呈相反趋势
     """
-    # 检查所有值是否有效
     if any(pd.isna(x) for x in [tad_is_median_0, tad_is_median_2, gene_exp_median_0, gene_exp_median_2]):
         return False
     
-    # 相反趋势检验
     return ((tad_is_median_0 > tad_is_median_2 and gene_exp_median_0 < gene_exp_median_2) or
             (tad_is_median_0 < tad_is_median_2 and gene_exp_median_0 > gene_exp_median_2))
 
 def check_branch2_directionality(tad_is_median_0, tad_is_median_2, 
-                                gene_exp_median_0, gene_exp_median_2,
-                                loop_strength_median_0, loop_strength_median_2,
-                                loop_count_0, loop_count_2):
+                                 gene_exp_median_0, gene_exp_median_2,
+                                 loop_strength_median_0, loop_strength_median_2,
+                                 loop_count_0, loop_count_2):
     """
     分支2方向性检验：所有指标呈一致趋势
     """
-    # 检查所有值是否有效
     values = [tad_is_median_0, tad_is_median_2, gene_exp_median_0, gene_exp_median_2,
               loop_strength_median_0, loop_strength_median_2, loop_count_0, loop_count_2]
     if any(pd.isna(x) for x in values):
         return False
     
-    # 一致趋势检验
     condition1 = (tad_is_median_0 < tad_is_median_2 and
                   gene_exp_median_0 < gene_exp_median_2 and
                   (loop_strength_median_0 < loop_strength_median_2 or loop_count_0 < loop_count_2))
@@ -438,7 +309,6 @@ def check_branch2_directionality(tad_is_median_0, tad_is_median_2,
 def load_and_validate_data(full_snp_id, gene_id, tad_id):
     """加载并验证三元组数据"""
     try:
-        # 检查数据存在性
         if full_snp_id not in _G["snp_data"].index:
             return None, f"SNP not found: {full_snp_id}"
         if gene_id not in _G["gene_exp"].index:
@@ -446,7 +316,6 @@ def load_and_validate_data(full_snp_id, gene_id, tad_id):
         if tad_id not in _G["tad_is"].index:
             return None, f"TAD not found in tad_is: {tad_id}"
         
-        # 加载数据
         snp_values = _G["snp_data"].loc[full_snp_id, _G["common_samples"]].astype(float)
         gene_values = _G["gene_exp"].loc[gene_id, _G["common_samples"]].astype(float)
         tad_is_values = _G["tad_is"].loc[tad_id, _G["common_samples"]].astype(float)
@@ -457,10 +326,8 @@ def load_and_validate_data(full_snp_id, gene_id, tad_id):
             "Gene_Exp": gene_values
         })
         
-        # 过滤期望基因型
         df = df[df["Genotype_num"].isin(Config.EXPECTED_GENOTYPES)]
         
-        # 验证数据质量
         if df.empty:
             return None, "No valid genotype data after filtering"
         if df["Genotype_num"].nunique() < 2:
@@ -476,15 +343,12 @@ def load_and_validate_data(full_snp_id, gene_id, tad_id):
         return None, f"Unexpected error in data loading: {str(e)}"
 
 # --------------------------------------------------------------------------
-# --- 分析函数 ---
+# --- 分析函数 (v5.2/v5.3 结构) ---
 # --------------------------------------------------------------------------
 def analyze_branch1(data_df, gene_start, gene_end, tad_start, tad_end):
-    """分析分支1"""
-    # 距离范围
+    """分析分支1 (三元组级别)"""
     branch1_start = tad_start - Config.DISTANCE_THRESHOLD_KB * 1000
     branch1_end = tad_end + Config.DISTANCE_THRESHOLD_KB * 1000
-    
-    # 距离检查
     distance_pass = check_overlap(gene_start, gene_end, branch1_start, branch1_end)
     
     result = {
@@ -497,7 +361,6 @@ def analyze_branch1(data_df, gene_start, gene_end, tad_start, tad_end):
         result["Failure_Reason"] = f"Branch1: Gene not within {Config.DISTANCE_THRESHOLD_KB}kb of TAD"
         return {"passed": False, "stats": result}
     
-    # 计算中位数
     median_is_0 = data_df[data_df["Genotype_num"] == 0]["TAD_IS_Score"].median()
     median_is_2 = data_df[data_df["Genotype_num"] == 2]["TAD_IS_Score"].median()
     median_exp_0 = data_df[data_df["Genotype_num"] == 0]["Gene_Exp"].median()
@@ -510,7 +373,6 @@ def analyze_branch1(data_df, gene_start, gene_end, tad_start, tad_end):
         "Gene_Exp_Median_Group2": median_exp_2
     })
     
-    # 方向性检查
     direction_pass = check_branch1_directionality(median_is_0, median_is_2, median_exp_0, median_exp_2)
     result["Branch1_Direction_Pass"] = direction_pass
     
@@ -520,115 +382,72 @@ def analyze_branch1(data_df, gene_start, gene_end, tad_start, tad_end):
     
     return {"passed": True, "stats": result}
 
-def analyze_branch2(data_df, gene_start, gene_end, tad_start, tad_end):
-    """分析分支2"""
-    # 距离范围
-    upstream_start = tad_start - Config.MAX_DISTANCE_KB * 1000
-    upstream_end = tad_start - Config.DISTANCE_THRESHOLD_KB * 1000
-    downstream_start = tad_end + Config.DISTANCE_THRESHOLD_KB * 1000
-    downstream_end = tad_end + Config.MAX_DISTANCE_KB * 1000
+def _test_single_loop_for_branch2(data_df_base, loop_info):
+    """
+    (v5.2 辅助函数): 独立测试单个Loop (四元组分析的核心)
+    """
+    loop_stats_results = {}
+    current_loop_id = loop_info["Loop_ID"] # (v5.5 修复: 使用大写的键)
     
-    # 距离检查
-    distance_pass = (check_overlap(gene_start, gene_end, upstream_start, upstream_end) or
-                    check_overlap(gene_start, gene_end, downstream_start, downstream_end))
-    
-    result = {
-        "Branch2_Upstream_Range_Start": upstream_start,
-        "Branch2_Upstream_Range_End": upstream_end,
-        "Branch2_Downstream_Range_Start": downstream_start,
-        "Branch2_Downstream_Range_End": downstream_end,
-        "Branch2_Distance_Pass": distance_pass
-    }
-    
-    if not distance_pass:
-        result["Failure_Reason"] = f"Branch2: Gene not in {Config.DISTANCE_THRESHOLD_KB}-{Config.MAX_DISTANCE_KB}kb range"
-        return {"passed": False, "stats": result}
-    
-    # Loop搜索
-    loop_info = find_overlapping_loop_for_branch2(gene_start, gene_end, tad_start, tad_end)
-    
-    if not loop_info or "loop_id" not in loop_info:
-        result["Failure_Reason"] = "Branch2: No overlapping loop found"
-        return {"passed": False, "stats": result}
-    
-    result["Branch2_Loop_Found"] = True
-    result.update({
-        "Loop_ID": loop_info["loop_id"],
-        "Loop_Match_Type": loop_info["match_type"],
-        "Gene_Anchor_Start": loop_info["gene_anchor_start"],
-        "Gene_Anchor_End": loop_info["gene_anchor_end"],
-        "TAD_Anchor_Start": loop_info["tad_anchor_start"],
-        "TAD_Anchor_End": loop_info["tad_anchor_end"],
-        "Gene_Position": loop_info["gene_position"],
-        "TAD_Anchor_Side": loop_info["tad_anchor_side"],
-        "Loop_Anchor1_Start": loop_info["loop_anchor1_start"],
-        "Loop_Anchor1_End": loop_info["loop_anchor1_end"],
-        "Loop_Anchor2_Start": loop_info["loop_anchor2_start"],
-        "Loop_Anchor2_End": loop_info["loop_anchor2_end"]
-    })
-    
-    # Loop显著性检验
     try:
-        loop_strength_values = _G["loop_strength_df"].loc[loop_info["loop_id"], _G["common_samples"]].astype(float)
-        loop_01_values = _G["loop_01_df"].loc[loop_info["loop_id"], _G["common_samples"]].astype(float)
+        if current_loop_id not in _G["loop_strength_df"].index or current_loop_id not in _G["loop_01_df"].index:
+            return {"passed": False, "reason": "loop_data_not_found_in_matrix"}
+            
+        loop_strength_values = _G["loop_strength_df"].loc[current_loop_id, _G["common_samples"]].astype(float)
+        loop_01_values = _G["loop_01_df"].loc[current_loop_id, _G["common_samples"]].astype(float)
         
-        data_df = data_df.copy()
-        data_df["Loop_Strength"] = loop_strength_values
-        data_df["Loop_Present"] = loop_01_values
+        data_df_loop = data_df_base.copy()
+        data_df_loop["Loop_Strength"] = loop_strength_values
+        data_df_loop["Loop_Present"] = loop_01_values
         
-        # Mann-Whitney检验
-        loop_strength_test = perform_mannwhitney_test(data_df, "Loop_Strength", "Genotype_num")
-        result.update({
-            "Loop_Strength_P": loop_strength_test["p_value"],
+        loop_strength_test = perform_mannwhitney_test(data_df_loop, "Loop_Strength", "Genotype_num")
+        loop_01_test = perform_independence_test(data_df_loop, "Loop_Present", "Genotype_num")
+        
+        loop_strength_p = loop_strength_test.get("p_value", np.nan)
+        loop_01_p = loop_01_test.get("p_value", np.nan)
+        
+        loop_significant = ((pd.notna(loop_strength_p) and loop_strength_p < Config.P_THRESHOLD_LOOP) or
+                            (pd.notna(loop_01_p) and loop_01_p < Config.P_THRESHOLD_LOOP))
+
+        if not loop_significant:
+            return {"passed": False, "reason": f"not_significant(S_p={loop_strength_p:.2g}; P_p={loop_01_p:.2g})"}
+        
+        sig_tests = []
+        if pd.notna(loop_strength_p) and loop_strength_p < Config.P_THRESHOLD_LOOP:
+            sig_tests.append(f"strength_p={loop_strength_p:.4f}")
+        if pd.notna(loop_01_p) and loop_01_p < Config.P_THRESHOLD_LOOP:
+            sig_tests.append(f"presence_p={loop_01_p:.4f}")
+        loop_stats_results["Loop_Significant_Tests"] = "; ".join(sig_tests)
+
+        median_is_0 = data_df_loop[data_df_loop["Genotype_num"] == 0]["TAD_IS_Score"].median()
+        median_is_2 = data_df_loop[data_df_loop["Genotype_num"] == 2]["TAD_IS_Score"].median()
+        median_exp_0 = data_df_loop[data_df_loop["Genotype_num"] == 0]["Gene_Exp"].median()
+        median_exp_2 = data_df_loop[data_df_loop["Genotype_num"] == 2]["Gene_Exp"].median()
+        median_loop_0 = loop_strength_test.get("group0_median", np.nan)
+        median_loop_2 = loop_strength_test.get("group2_median", np.nan)
+        
+        ct_loop_01 = _prepare_2x2_contingency_table(data_df_loop, "Loop_Present", "Genotype_num")
+        count_loop_0 = ct_loop_01.loc[1, 0] if ct_loop_01 is not None and 1 in ct_loop_01.index else 0
+        count_loop_2 = ct_loop_01.loc[1, 2] if ct_loop_01 is not None and 1 in ct_loop_01.index else 0
+
+        direction_pass = check_branch2_directionality(median_is_0, median_is_2, median_exp_0, median_exp_2,
+                                                      median_loop_0, median_loop_2, count_loop_0, count_loop_2)
+        
+        if not direction_pass:
+            return {"passed": False, "reason": "direction_fail"}
+        
+        loop_stats_results.update({
+            "Branch2_Loop_Significant": True,
+            "Branch2_Direction_Pass": True,
+            "Loop_Strength_P": loop_strength_p,
             "Loop_Strength_Stat": loop_strength_test.get("stat", np.nan),
             "Loop_Strength_N0": loop_strength_test.get("group0_size", 0),
             "Loop_Strength_N2": loop_strength_test.get("group2_size", 0),
-            "Loop_Strength_Median0": loop_strength_test.get("group0_median", np.nan),
-            "Loop_Strength_Median2": loop_strength_test.get("group2_median", np.nan)
-        })
-        
-        # 独立性检验
-        loop_01_test = perform_independence_test(data_df, "Loop_Present", "Genotype_num")
-        result.update({
-            "Loop_01_P": loop_01_test["p_value"],
+            "Loop_01_P": loop_01_p,
             "Loop_01_Test_Method": loop_01_test.get("test_used", "unknown"),
             "Loop_01_Test_Reason": loop_01_test.get("reason", ""),
             "Loop_01_Sample_Size": loop_01_test.get("sample_size", 0),
-            "Loop_01_Expected_Min": loop_01_test.get("expected_min", np.nan)
-        })
-        
-        # 显著性检查
-        loop_significant = ((pd.notna(result["Loop_Strength_P"]) and 
-                            result["Loop_Strength_P"] < Config.P_THRESHOLD_LOOP) or
-                           (pd.notna(result["Loop_01_P"]) and 
-                            result["Loop_01_P"] < Config.P_THRESHOLD_LOOP))
-        
-        result["Branch2_Loop_Significant"] = loop_significant
-        
-        # 记录显著性信息
-        sig_tests = []
-        if pd.notna(result["Loop_Strength_P"]) and result["Loop_Strength_P"] < Config.P_THRESHOLD_LOOP:
-            sig_tests.append(f"strength_p={result['Loop_Strength_P']:.4f}")
-        if pd.notna(result["Loop_01_P"]) and result["Loop_01_P"] < Config.P_THRESHOLD_LOOP:
-            sig_tests.append(f"presence_p={result['Loop_01_P']:.4f}")
-        
-        result["Loop_Significant_Tests"] = "; ".join(sig_tests) if sig_tests else "none"
-        
-        if not loop_significant:
-            result["Failure_Reason"] = f"Branch2: Loop not significant ({result['Loop_Significant_Tests']})"
-            return {"passed": False, "stats": result}
-        
-        # 计算所有中位数
-        median_is_0 = data_df[data_df["Genotype_num"] == 0]["TAD_IS_Score"].median()
-        median_is_2 = data_df[data_df["Genotype_num"] == 2]["TAD_IS_Score"].median()
-        median_exp_0 = data_df[data_df["Genotype_num"] == 0]["Gene_Exp"].median()
-        median_exp_2 = data_df[data_df["Genotype_num"] == 2]["Gene_Exp"].median()
-        median_loop_0 = data_df[data_df["Genotype_num"] == 0]["Loop_Strength"].median()
-        median_loop_2 = data_df[data_df["Genotype_num"] == 2]["Loop_Strength"].median()
-        count_loop_0 = data_df[data_df["Genotype_num"] == 0]["Loop_Present"].sum()
-        count_loop_2 = data_df[data_df["Genotype_num"] == 2]["Loop_Present"].sum()
-
-        result.update({
+            "Loop_01_Expected_Min": loop_01_test.get("expected_min", np.nan),
             "TAD_IS_Median_Group0": median_is_0,
             "TAD_IS_Median_Group2": median_is_2,
             "Gene_Exp_Median_Group0": median_exp_0,
@@ -638,30 +457,17 @@ def analyze_branch2(data_df, gene_start, gene_end, tad_start, tad_end):
             "Loop_Count_Group0": count_loop_0,
             "Loop_Count_Group2": count_loop_2
         })
+        
+        return {"passed": True, "stats": loop_stats_results}
 
-        # 方向性检查
-        direction_pass = check_branch2_directionality(median_is_0, median_is_2, median_exp_0, median_exp_2,
-                                                     median_loop_0, median_loop_2, count_loop_0, count_loop_2)
-        result["Branch2_Direction_Pass"] = direction_pass
-        
-        if not direction_pass:
-            result["Failure_Reason"] = "Branch2: Direction criteria not met"
-            return {"passed": False, "stats": result}
-        
-        return {"passed": True, "stats": result}
-        
-    except KeyError as e:
-        result["Failure_Reason"] = f"Loop {loop_info['loop_id']} data not found: {str(e)}"
-        return {"passed": False, "stats": result}
     except Exception as e:
-        result["Failure_Reason"] = f"Loop analysis error: {str(e)}"
-        return {"passed": False, "stats": result}
+        return {"passed": False, "reason": f"unexpected_error({str(e)})"}
 
 def initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
-                         gene_chrom, gene_start, gene_end,
-                         tad_chrom, tad_start, tad_end,
-                         gene_tad_distance, gene_tad_relation):
-    """初始化统计结果字典"""
+                          gene_chrom, gene_start, gene_end,
+                          tad_chrom, tad_start, tad_end,
+                          gene_tad_distance, gene_tad_relation):
+    """初始化统计结果字典 (v5.5: 修正了诊断列名称以减少混淆)"""
     return {
         # 基础信息
         "Gene_ID": gene_id, "TAD_ID": tad_id, "SNP_ID": snp_id, "Full_SNP_ID": full_snp_id,
@@ -672,13 +478,13 @@ def initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
         "Gene_TAD_Relation": gene_tad_relation,
         
         # 分支判断
-        "Branch_Pass": "None",
+        "Branch_Pass": "None", 
         "Branch1_Distance_Pass": False,
         "Branch1_Direction_Pass": False,
         "Branch2_Distance_Pass": False,
-        "Branch2_Loop_Found": False,
-        "Branch2_Loop_Significant": False,
-        "Branch2_Direction_Pass": False,
+        "Branch2_Loop_Found": False, 
+        "Branch2_Loop_Significant": False, 
+        "Branch2_Direction_Pass": False, 
         
         # 范围信息
         "Branch1_Range_Start": np.nan,
@@ -689,8 +495,10 @@ def initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
         "Branch2_Downstream_Range_End": np.nan,
         
         # Loop信息
-        "Loop_ID": np.nan,
+        "Loop_ID": np.nan, 
         "Loop_Match_Type": np.nan,
+        "Triplet_B2_Candidate_Count": 0, # (v5.5 重命名: 澄清这是三元组级别的诊断)
+        "Triplet_B2_Candidate_List_All": np.nan, # (v5.5 重命名)
         "Gene_Anchor_Start": np.nan,
         "Gene_Anchor_End": np.nan,
         "Gene_Anchor_Distance_kb": Config.GENE_ANCHOR_DISTANCE_KB,
@@ -722,10 +530,10 @@ def initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
         "TAD_IS_Median_Group2": np.nan,
         "Gene_Exp_Median_Group0": np.nan,
         "Gene_Exp_Median_Group2": np.nan,
-        "Loop_Strength_Median_Group0": np.nan,
-        "Loop_Strength_Median_Group2": np.nan,
-        "Loop_Count_Group0": np.nan,
-        "Loop_Count_Group2": np.nan,
+        "Loop_Strength_Median_Group0": np.nan, 
+        "Loop_Strength_Median_Group2": np.nan, 
+        "Loop_Count_Group0": np.nan, 
+        "Loop_Count_Group2": np.nan, 
         
         # 样本信息
         "Sample_Count_Group0": np.nan,
@@ -736,12 +544,12 @@ def initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
     }
 
 def analyze_single_triplet(triplet_dict):
-    """分析单个三元组的主函数"""
-    # 初始化stats以便在异常时也能返回
-    stats = {}
+    """
+    分析单个三元组的主函数 (v5.5 结构)
+    """
     
+    stats_template = {} 
     try:
-        # 提取基础信息
         gene_id = triplet_dict['Gene_ID']
         tad_id = triplet_dict['TAD_ID']
         snp_id = triplet_dict['SNP_ID']
@@ -753,54 +561,94 @@ def analyze_single_triplet(triplet_dict):
         tad_start = triplet_dict['TAD_start']
         tad_end = triplet_dict['TAD_end']
 
-        # 计算距离和关系
         gene_tad_distance, gene_tad_relation = calculate_gene_tad_distance_and_relation(
             gene_start, gene_end, tad_start, tad_end
         )
         
-        # 初始化统计
-        stats = initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
-                                     gene_chrom, gene_start, gene_end,
-                                     tad_chrom, tad_start, tad_end,
-                                     gene_tad_distance, gene_tad_relation)
+        stats_template = initialize_stats_dict(gene_id, tad_id, snp_id, full_snp_id,
+                                               gene_chrom, gene_start, gene_end,
+                                               tad_chrom, tad_start, tad_end,
+                                               gene_tad_distance, gene_tad_relation)
         
-        # 加载数据
         data_df, failure_reason = load_and_validate_data(full_snp_id, gene_id, tad_id)
         if data_df is None:
-            stats["Failure_Reason"] = failure_reason
-            return {"pass": False, "stats": stats}
+            stats_template["Failure_Reason"] = failure_reason
+            return [stats_template] 
         
-        # 记录样本量
-        stats["Sample_Count_Group0"] = len(data_df[data_df["Genotype_num"] == 0])
-        stats["Sample_Count_Group2"] = len(data_df[data_df["Genotype_num"] == 2])
+        stats_template["Sample_Count_Group0"] = len(data_df[data_df["Genotype_num"] == 0])
+        stats_template["Sample_Count_Group2"] = len(data_df[data_df["Genotype_num"] == 2])
         
-        # 分支1分析
         branch1_result = analyze_branch1(data_df, gene_start, gene_end, tad_start, tad_end)
+        stats_template.update(branch1_result["stats"]) 
+
         if branch1_result["passed"]:
-            stats.update(branch1_result["stats"])
-            stats["Branch_Pass"] = "Branch_1_Pass"
-            return {"pass": True, "stats": stats}
-        else:
-            stats.update(branch1_result["stats"])
+            stats_template["Branch_Pass"] = "Branch_1_Pass"
+            return [stats_template] 
         
-        # 分支2分析
-        branch2_result = analyze_branch2(data_df, gene_start, gene_end, tad_start, tad_end)
-        if branch2_result["passed"]:
-            stats.update(branch2_result["stats"])
-            stats["Branch_Pass"] = "Branch_2_Pass"
-            return {"pass": True, "stats": stats}
-        else:
-            stats.update(branch2_result["stats"])
-            if not stats.get("Failure_Reason"):
-                stats["Failure_Reason"] = "Did not pass any branch criteria"
-            return {"pass": False, "stats": stats}
+        upstream_start = tad_start - Config.MAX_DISTANCE_KB * 1000
+        upstream_end = tad_start - Config.DISTANCE_THRESHOLD_KB * 1000
+        downstream_start = tad_end + Config.DISTANCE_THRESHOLD_KB * 1000
+        downstream_end = tad_end + Config.MAX_DISTANCE_KB * 1000
+        distance_pass = (check_overlap(gene_start, gene_end, upstream_start, upstream_end) or
+                         check_overlap(gene_start, gene_end, downstream_start, downstream_end))
+
+        stats_template.update({
+            "Branch2_Upstream_Range_Start": upstream_start,
+            "Branch2_Upstream_Range_End": upstream_end,
+            "Branch2_Downstream_Range_Start": downstream_start,
+            "Branch2_Downstream_Range_End": downstream_end,
+            "Branch2_Distance_Pass": distance_pass
+        })
         
+        if not distance_pass:
+            stats_template["Failure_Reason"] = (f"{stats_template.get('Failure_Reason', 'B1_Fail')}; "
+                                               f"Branch2: Gene not in {Config.DISTANCE_THRESHOLD_KB}-{Config.MAX_DISTANCE_KB}kb range")
+            return [stats_template] 
+        
+        candidate_loops_list = find_all_overlapping_loops_for_branch2(gene_start, gene_end, tad_start, tad_end)
+        # (v5.5 重命名)
+        stats_template["Triplet_B2_Candidate_Count"] = len(candidate_loops_list)
+        if candidate_loops_list:
+            # (v5.5 重命名)
+            stats_template["Triplet_B2_Candidate_List_All"] = ";".join([str(l['Loop_ID']) for l in candidate_loops_list]) 
+            stats_template["Branch2_Loop_Found"] = True
+        else:
+            stats_template["Triplet_B2_Candidate_List_All"] = np.nan # (v5.5 重命名)
+            stats_template["Failure_Reason"] = (f"{stats_template.get('Failure_Reason', 'B1_Fail')}; "
+                                               f"Branch2: No overlapping loop found")
+            return [stats_template] 
+
+        passing_quadruplet_rows = []
+        loop_failure_reasons = []
+
+        for loop_info in candidate_loops_list:
+            # loop_info 此时是一个包含 大写键 Loop_ID, Gene_Anchor_Start... 的字典
+            loop_test_result = _test_single_loop_for_branch2(data_df, loop_info)
+            
+            if loop_test_result["passed"]:
+                passing_row_stats = stats_template.copy()
+                passing_row_stats.update(loop_info) # (v5.5 修复: 此处 loop_info 键已全部大写, 能够正确填充)
+                passing_row_stats.update(loop_test_result["stats"]) 
+                passing_row_stats["Branch_Pass"] = "Branch_2_Pass"
+                passing_row_stats["Failure_Reason"] = np.nan 
+                passing_quadruplet_rows.append(passing_row_stats)
+            else:
+                loop_failure_reasons.append(f"{loop_info['Loop_ID']}:{loop_test_result['reason']}") # (v5.5 修复: 使用大写 'Loop_ID')
+
+        if passing_quadruplet_rows:
+            return passing_quadruplet_rows
+        else:
+            stats_template["Failure_Reason"] = (f"{stats_template.get('Failure_Reason', 'B1_Fail')}; "
+                                              f"Branch2: All {len(candidate_loops_list)} candidate loops failed tests. "
+                                              f"Reasons: [{'; '.join(loop_failure_reasons)}]")
+            return [stats_template]
+
     except Exception as e:
-        if not stats:
-            stats = {"Failure_Reason": f"Critical error: {str(e)}"}
+        if not stats_template:
+            stats_template = {"Failure_Reason": f"Critical error: {str(e)}"}
         else:
-            stats["Failure_Reason"] = f"Unexpected error: {str(e)}"
-        return {"pass": False, "stats": stats}
+            stats_template["Failure_Reason"] = f"Unexpected error: {str(e)}"
+        return [stats_template] 
 
 # --------------------------------------------------------------------------
 # --- 多进程支持 ---
@@ -818,7 +666,6 @@ def _init_globals(args_main):
             "loop_01": pd.read_csv(args_main.loop_01, sep='\t', index_col=0),
         }
 
-        # 清理列名
         for df in data_files.values():
             if not df.columns.empty:
                 df.columns = df.columns.str.strip()
@@ -827,6 +674,12 @@ def _init_globals(args_main):
         _G["loop_strength_df"] = data_files["loop_strength"]
         _G["loop_01_df"] = data_files["loop_01"]
         _G["loop_pos_df"] = data_files["loop_pos"]
+        
+        if _G["loop_pos_df"].index.name is None and not _G["loop_pos_df"].index.is_unique:
+             _G["loop_pos_df"] = _G["loop_pos_df"].reset_index(drop=True)
+        elif _G["loop_pos_df"].index.name is not None and not _G["loop_pos_df"].index.is_unique:
+             print("警告: loop_pos 索引列不唯一，但被保留。iterrows可能迭代重复的索引。", file=sys.stderr)
+
         _G["common_samples"] = data_files["snp_data"].columns.tolist()
 
     except Exception as e:
@@ -852,15 +705,17 @@ def convert_triplets_to_dicts(triplets_df):
     ]
 
 # --------------------------------------------------------------------------
-# --- 结果保存和报告 ---
+# --- 结果保存和报告 (v5.5 MODIFIED: 匹配重命名) ---
 # --------------------------------------------------------------------------
-def save_results(all_stats, passed_stats, output_dir):
-    """保存分析结果"""
-    if not all_stats:
+def save_results(all_output_rows, passed_output_rows, output_dir):
+    """
+    保存分析结果 (v5.5)
+    """
+    if not all_output_rows:
         print("没有结果数据", file=sys.stderr)
         return
     
-    all_stats_df = pd.DataFrame(all_stats)
+    all_stats_df = pd.DataFrame(all_output_rows)
     
     # 列顺序
     output_cols = [
@@ -879,7 +734,9 @@ def save_results(all_stats, passed_stats, output_dir):
         "Branch2_Downstream_Range_Start", "Branch2_Downstream_Range_End",
         
         # Loop信息
-        "Loop_ID", "Loop_Match_Type", "Gene_Anchor_Start", "Gene_Anchor_End", "Gene_Anchor_Distance_kb",
+        "Loop_ID", "Loop_Match_Type", 
+        "Triplet_B2_Candidate_Count", "Triplet_B2_Candidate_List_All", # (v5.5 重命名)
+        "Gene_Anchor_Start", "Gene_Anchor_End", "Gene_Anchor_Distance_kb",
         "TAD_Anchor_Start", "TAD_Anchor_End", "Gene_Position", "TAD_Anchor_Side",
         "Loop_Anchor1_Start", "Loop_Anchor1_End", "Loop_Anchor2_Start", "Loop_Anchor2_End",
         
@@ -905,55 +762,116 @@ def save_results(all_stats, passed_stats, output_dir):
     output_path.mkdir(parents=True, exist_ok=True)
     
     # 保存文件
-    complete_file = output_path / "complete_analysis_results.csv"
-    all_stats_df.to_csv(complete_file, sep=",", index=False)
+    complete_file = output_path / "complete_analysis_results_quadruplets.csv"
+    all_stats_df.to_csv(complete_file, sep=",", index=False, float_format='%.6g') 
     print(f"完整结果已保存: {complete_file.absolute()}", file=sys.stderr)
     
-    if passed_stats:
-        passed_df = pd.DataFrame(passed_stats).reindex(columns=output_cols)
-        passed_file = output_path / "passed_triplets_results.csv"
-        passed_df.to_csv(passed_file, sep=",", index=False)
+    if passed_output_rows:
+        passed_df = pd.DataFrame(passed_output_rows).reindex(columns=output_cols)
+        passed_file = output_path / "passed_quadruplets_results.csv"
+        passed_df.to_csv(passed_file, sep=",", index=False, float_format='%.6g')
         print(f"通过筛选结果已保存: {passed_file.absolute()}", file=sys.stderr)
 
-def print_summary_statistics(all_stats, passed_stats):
-    """输出汇总统计"""
+def print_summary_statistics(all_output_rows, passed_output_rows, total_triplets_input_count):
+    """
+    输出汇总统计 (v5.5, 匹配重命名的列)
+    """
+    
     print("-" * 60, file=sys.stderr)
-    print("分析结果汇总:", file=sys.stderr)
-    
-    if passed_stats:
-        passed_df = pd.DataFrame(passed_stats)
-        print("\n通过各分支的数量:", file=sys.stderr)
-        branch_counts = passed_df["Branch_Pass"].value_counts()
-        for branch, count in branch_counts.items():
-            print(f"  {branch}: {count}", file=sys.stderr)
-    
-    # 失败原因
-    all_df = pd.DataFrame(all_stats)
+    print("分析结果汇总 (v5.5 - 详细漏斗分析报告):", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+
+    if not all_output_rows:
+        print("警告: 未生成任何分析结果。", file=sys.stderr)
+        return
+
+    all_df = pd.DataFrame(all_output_rows)
+    passed_df = pd.DataFrame(passed_output_rows) if passed_output_rows else pd.DataFrame(columns=all_df.columns)
     failed_df = all_df[all_df["Branch_Pass"] == "None"]
-    if len(failed_df) > 0:
-        print("\n失败原因统计:", file=sys.stderr)
-        failure_counts = failed_df["Failure_Reason"].value_counts()
-        for reason, count in failure_counts.head(10).items():
-            print(f"  {reason}: {count}", file=sys.stderr)
+
+    unique_triplet_keys = ["SNP_ID", "TAD_ID", "Gene_ID"]
+    total_triplets_processed = all_df[unique_triplet_keys].drop_duplicates().shape[0]
+
+    # --- 1. 漏斗总览 ---
+    print(f"--- 1. 分析漏斗总览 ---", file=sys.stderr)
+    print(f"总共接收三元组: {total_triplets_input_count}", file=sys.stderr)
+    if total_triplets_processed != total_triplets_input_count:
+         print(f"警告: 已处理的独特三元组 ({total_triplets_processed}) 与输入数 ({total_triplets_input_count}) 不匹配!", file=sys.stderr)
     
-    # 统计方法使用情况
-    if len(all_df) > 0:
-        print("\n统计检验方法使用:", file=sys.stderr)
+    passed_b1_df = passed_df[passed_df["Branch_Pass"] == "Branch_1_Pass"]
+    passed_b1_count = len(passed_b1_df)
+    
+    passed_b2_df = passed_df[passed_df["Branch_Pass"] == "Branch_2_Pass"]
+    passed_b2_rows = len(passed_b2_df)
+    passed_b2_unique_triplets = 0
+    if passed_b2_rows > 0:
+        passed_b2_unique_triplets = passed_b2_df[unique_triplet_keys].drop_duplicates().shape[0]
+
+    failed_count = len(failed_df)
+
+    print(f"\n[ 漏斗结果 ]:", file=sys.stderr)
+    print(f"  > 成功 (分支1 通过): {passed_b1_count} 个三元组", file=sys.stderr)
+    print(f"  > 成功 (分支2 通过): {passed_b2_unique_triplets} 个三元组 (产生了 {passed_b2_rows} 个成功的四元组)", file=sys.stderr)
+    print(f"  > 失败 (所有分支):   {failed_count} 个三元组", file=sys.stderr)
+    print(f"  ---------------------------------", file=sys.stderr)
+    print(f"  总计:               {passed_b1_count + passed_b2_unique_triplets + failed_count} 个三元组被分类。", file=sys.stderr)
+
+    # --- 2. 成功案例分析 ---
+    print(f"\n--- 2. 成功案例分析 (共 {passed_b1_count + passed_b2_rows} 行) ---", file=sys.stderr)
+    if passed_b2_unique_triplets > 0:
+        print(f"分支2 成功详情 (来自 {passed_b2_unique_triplets} 个三元组):", file=sys.stderr)
+        unique_passed_b2_triplets_df = passed_b2_df.drop_duplicates(subset=unique_triplet_keys)
+        # (v5.5 重命名)
+        avg_cands = unique_passed_b2_triplets_df['Triplet_B2_Candidate_Count'].mean()
+        min_cands = unique_passed_b2_triplets_df['Triplet_B2_Candidate_Count'].min()
+        max_cands = unique_passed_b2_triplets_df['Triplet_B2_Candidate_Count'].max()
+        avg_passed_quads = passed_b2_rows / passed_b2_unique_triplets
         
-        loop_methods = all_df[all_df["Loop_01_Test_Method"].notna()]["Loop_01_Test_Method"].value_counts()
-        if not loop_methods.empty:
-            total_tests = loop_methods.sum()
-            for method, count in loop_methods.items():
-                pct = count / total_tests * 100
-                print(f"  {method}: {count}/{total_tests} ({pct:.1f}%)", file=sys.stderr)
+        print(f"  - 平均每个成功的三元组产生了 {avg_passed_quads:.2f} 个成功的Loop通路。", file=sys.stderr)
+        print(f"  - 这些成功的三元组平均匹配了 {avg_cands:.1f} 个候选Loop (范围从 {min_cands} 到 {max_cands})。", file=sys.stderr)
+
+    # --- 3. 失败案例分析 ---
+    print(f"\n--- 3. 失败案例分析 (共 {failed_count} 个三元组) ---", file=sys.stderr)
+    print("失败原因分类统计 (所有类别):", file=sys.stderr)
     
+    if failed_count > 0:
+        failure_counts = failed_df["Failure_Reason"].value_counts().sort_values(ascending=False)
+        for reason, count in failure_counts.items(): 
+            reason_short = (reason[:130] + '...') if len(str(reason)) > 130 else str(reason)
+            print(f"  - [{reason_short}]: {count} 个三元组", file=sys.stderr)
+
+        failed_all_loops_df = failed_df[failed_df['Failure_Reason'].str.contains("All candidate loops failed tests", na=False)]
+        failed_all_loops_count = len(failed_all_loops_df)
+        if failed_all_loops_count > 0:
+            print(f"\n  'All Loops Failed' 案例详情 (共 {failed_all_loops_count} 个):", file=sys.stderr)
+            # (v5.5 重命名)
+            avg_fail_cands = failed_all_loops_df['Triplet_B2_Candidate_Count'].mean()
+            min_fail_cands = failed_all_loops_df['Triplet_B2_Candidate_Count'].min()
+            max_fail_cands = failed_all_loops_df['Triplet_B2_Candidate_Count'].max()
+            print(f"    - 这些失败的三元组平均测试了 {avg_fail_cands:.1f} 个Loop (范围从 {min_fail_cands} 到 {max_fail_cands})。", file=sys.stderr)
+            print(f"    - ... 并且所有候选Loop均未通过检验 (p值过高 或 方向性错误)。", file=sys.stderr)
+    else:
+        print("  - 无失败记录。", file=sys.stderr)
+
+    # --- 4. 统计方法使用情况 ---
+    print(f"\n--- 4. 统计检验方法使用 (针对所有B2中测试过的Loop) ---", file=sys.stderr)
+    loop_methods = all_df[all_df["Loop_01_Test_Method"].notna()]["Loop_01_Test_Method"].value_counts()
+    if not loop_methods.empty:
+        total_tests = loop_methods.sum()
+        print(f"  总共执行了 {total_tests} 次 Loop 0-1 独立性检验:", file=sys.stderr)
+        for method, count in loop_methods.items():
+            pct = count / total_tests * 100
+            print(f"    - {method}: {count} 次 ({pct:.1f}%)", file=sys.stderr)
+    else:
+        print("  - 未执行任何 Loop 0-1 检验。", file=sys.stderr)
+        
     print("=" * 60, file=sys.stderr)
 
 # --------------------------------------------------------------------------
 # --- 主函数 ---
 # --------------------------------------------------------------------------
 def main():
-    """主函数"""
+    """主函数 (v5.4)""" # 逻辑与 v5.4 相同
     args = parse_args()
     
     # 设置配置
@@ -964,38 +882,40 @@ def main():
     
     # 输出配置
     print("=" * 60, file=sys.stderr)
-    print("严谨SNP-TAD-Gene分析开始", file=sys.stderr)
+    print("严谨SNP-TAD-Gene分析开始 (v5.5 - 四元组策略 + 键名修复)", file=sys.stderr)
     print("=" * 60, file=sys.stderr)
     print(f"配置参数:", file=sys.stderr)
-    print(f"  距离临界值: {Config.DISTANCE_THRESHOLD_KB} kb", file=sys.stderr)
-    print(f"  最远距离: {Config.MAX_DISTANCE_KB} kb", file=sys.stderr)
-    print(f"  基因anchor距离: {Config.GENE_ANCHOR_DISTANCE_KB} kb", file=sys.stderr)
-    print(f"  Loop p值阈值: {Config.P_THRESHOLD_LOOP}", file=sys.stderr)
-    print(f"  输出目录: {args.output_dir}", file=sys.stderr)
+    print(f"   策略: 评估所有 (SNP,TAD,Gene,Loop) 四元组。", file=sys.stderr)
+    print(f"   边界逻辑: 端点包容 (<=)。", file=sys.stderr)
+    print(f"   Loop p值阈值: {Config.P_THRESHOLD_LOOP} (独立应用于每个候选Loop)", file=sys.stderr)
+    print(f"   输出目录: {args.output_dir}", file=sys.stderr)
     print("-" * 60, file=sys.stderr)
     
     # 加载三元组
     triplets_df = pd.read_csv(args.triplets_with_positions)
-    print(f"加载 {len(triplets_df)} 个三元组", file=sys.stderr)
+    total_triplets_to_process = len(triplets_df)
+    print(f"加载 {total_triplets_to_process} 个三元组进行分析", file=sys.stderr)
     
     triplets_list = convert_triplets_to_dicts(triplets_df)
     
     # 多进程分析
-    results = []
+    all_output_rows_flat = [] 
+    
     with Pool(processes=args.num_cores, initializer=_init_globals, initargs=(args,)) as pool:
-        for result in tqdm(pool.imap_unordered(analyze_single_triplet, triplets_list, chunksize=10),
-                          total=len(triplets_list), desc="分析三元组", file=sys.stderr):
-            results.append(result)
+        for result_list_per_triplet in tqdm(pool.imap_unordered(analyze_single_triplet, triplets_list, chunksize=5),
+                                            total=total_triplets_to_process, desc="分析三元组", file=sys.stderr):
+            
+            all_output_rows_flat.extend(result_list_per_triplet)
 
     # 整理结果
-    all_stats = [r["stats"] for r in results]
-    passed_stats = [r["stats"] for r in results if r["pass"]]
+    passed_output_rows = [row for row in all_output_rows_flat if row["Branch_Pass"] != "None"]
     
-    print(f"\n分析完成: {len(all_stats)} 总数, {len(passed_stats)} 通过", file=sys.stderr)
+    print(f"\n分析完成: {total_triplets_to_process} 个三元组被处理。", file=sys.stderr)
+    print(f"总共生成 {len(all_output_rows_flat)} 行输出 (包括 {len(passed_output_rows)} 行通过筛选的记录和 {len(all_output_rows_flat) - len(passed_output_rows)} 行失败记录)。", file=sys.stderr)
     
     # 保存和报告
-    save_results(all_stats, passed_stats, args.output_dir)
-    print_summary_statistics(all_stats, passed_stats)
+    save_results(all_output_rows_flat, passed_output_rows, args.output_dir)
+    print_summary_statistics(all_output_rows_flat, passed_output_rows, total_triplets_to_process)
 
 if __name__ == "__main__":
     main()

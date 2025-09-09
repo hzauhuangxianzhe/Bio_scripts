@@ -1,10 +1,11 @@
 #!/usr/bin/env Rscript
 
-# 脚本功能：为每个通过的三元组绘制六种图（TAD IS、基因表达、FL表型、FS表型、Loop强度、Loop有无 vs 基因型），
+# 脚本功能：为每个通过的三元组/四元组绘制六种图（TAD IS、基因表达、FL表型、FS表型、Loop强度、Loop有无 vs 基因型），
 # 并将它们合并到一张图中 (2x3 布局)，同时标记预计算的P值。
 #
-# 版本 2.0 (修改版): 
-# - 用一个基于比例的热图 (geom_tile) 替换了 ggmosaic 马赛克图，以提高美观度和布局一致性。
+# 版本 3.0 (修改版): 
+# - (新) Loop状态图 (geom_tile) 现在是一个完整的 2x2 列联表热图，显示原始计数和列百分比。
+# - (新) Loop强度图和Loop状态图的标题现在动态包含 Loop ID。
 #
 # 该脚本依赖于以下 R 包：
 # - ggplot2: 用于生成高质量的统计图形。
@@ -12,8 +13,6 @@
 # - dplyr: 用于数据操作和处理。
 # - optparse: 用于处理命令行参数。
 # - patchwork: 用于将多个 ggplot 图组合到单个图像中。
-#
-# (ggmosaic 已不再需要)
 #
 
 # 加载必要的库
@@ -100,7 +99,7 @@ loop_strength_long <- read.table(opt$loop_strength, header = TRUE, sep = "\t", c
 loop_status_long <- read.table(opt$loop_status, header = TRUE, sep = "\t", check.names = FALSE) %>%
   pivot_longer(cols = -Loop_ID, names_to = "Sample_ID", values_to = "Status")
 
-# --- 3. 定义绘图函数 ---
+# --- 3. 定义绘图函数 (v3.0 MODIFIED) ---
 
 # 定义一个返回ggplot对象的通用绘图函数（箱线图）
 create_boxplot <- function(data, y_label, title_label, p_value, ref_base, alt_base) {
@@ -117,80 +116,83 @@ create_boxplot <- function(data, y_label, title_label, p_value, ref_base, alt_ba
       title = title_label,
       x = "Genotype",
       y = y_label,
-      subtitle = sprintf("P = %.2e", p_value) # 将P值添加到副标题
+      subtitle = sprintf("MWU P = %.2e", p_value) # 明确P值来源
     ) +
     scale_fill_brewer(palette = "Set2") +
     theme_classic() +
     theme(
-      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5, size = 9, face = "italic"), # 居中P值
+      plot.title = element_text(hjust = 0.5, size = 10, face = "bold"), # 缩小标题字体以适应更长的Loop ID
+      plot.subtitle = element_text(hjust = 0.5, size = 9, face = "italic"), 
       axis.title = element_text(size = 10),
       axis.text = element_text(size = 9),
       legend.position = "none",
       plot.margin = unit(c(5, 5, 5, 5), "mm")
     )
 
-  # (旧的P值注释方法被移到 subtitle 中，以确保所有图表对齐)
   return(p)
 }
 
-# *** 新函数: 替代 create_mosaic_plot ***
-# 定义一个用于绘制Loop有无比例的热图函数
-create_status_heatmap <- function(data, title_label, p_value, ref_base, alt_base) {
 
-  # 1. 计算每个基因型组的Loop Found (Status=1) 的比例
-  agg_data <- data %>%
-    mutate(Status_Num = as.numeric(as.character(Status))) %>%
-    group_by(Genotype) %>%
-    summarise(
-      Proportion_Found = mean(Status_Num == 1, na.rm = TRUE),
-      .groups = 'drop'
+# *** (v3.0 MODIFIED: 重写为 2x2 列联表热图) ***
+# 定义一个用于绘制Loop有无的 2x2 列联表热图函数
+create_contingency_heatmap <- function(data, title_label, p_value, ref_base, alt_base) {
+
+  # 1. 转换Status和Genotype为因子，用于正确的标签和排序
+  data_to_plot <- data %>%
+    mutate(
+      Status_Label = factor(Status, levels = c(0, 1), labels = c("Absent (0)", "Present (1)")),
+      Genotype_Label = factor(Genotype, levels = c(2, 0), 
+                              labels = c(paste0(ref_base, ref_base, "(2)"), paste0(alt_base, alt_base, "(0)")))
     )
 
-  # 2. 手动添加Genotype_Label以确保顺序和标签与箱线图一致
-  agg_data$Genotype_Label <- factor(agg_data$Genotype, 
-                                    levels = c(2, 0),
-                                    labels = c(paste0(ref_base, ref_base, "(2)"), paste0(alt_base, alt_base, "(0)")))
+  # 2. 计算 2x2 表格中所有4个单元格的计数(N)，并使用 complete() 填充0
+  count_data <- data_to_plot %>%
+    group_by(Genotype_Label, Status_Label) %>%
+    summarise(N = n(), .groups = 'drop') %>%
+    tidyr::complete(Genotype_Label, Status_Label, fill = list(N = 0))
   
-  # 3. 添加一个虚拟的Y轴变量用于绘图
-  agg_data$dummy_y <- "Loop Status"
+  # 3. 计算列百分比 (即在同一基因型中，0和1的比例)
+  count_data <- count_data %>%
+    group_by(Genotype_Label) %>%
+    mutate(
+      Col_Total = sum(N),
+      Col_Prop = ifelse(Col_Total == 0, 0, N / Col_Total) # 避免除以零
+    ) %>%
+    ungroup()
+  
+  # 4. 创建文本标签 (显示 原始计数 和 列百分比)
+  count_data$Label <- sprintf("%d\n(%.1f%%)", count_data$N, count_data$Col_Prop * 100)
 
-  # 4. 格式化P值用于副标题
-  formatted_p <- sprintf("P = %.4e", p_value)
+  # 5. 格式化P值用于副标题
+  formatted_p <- sprintf("Fisher/Chi2 P = %.4e", p_value)
 
-  # 5. 绘制Tile图 (热图)
-  p <- ggplot(agg_data, aes(x = Genotype_Label, y = dummy_y, fill = Proportion_Found)) +
-    geom_tile(color = "black", size = 0.5) + # 绘制色块，并添加黑色边框
-    geom_text(aes(label = sprintf("%.1f%%", Proportion_Found * 100)), color = "white", size = 3.5, fontface = "bold") + # 在色块内添加百分比
-    scale_fill_gradient(low = "#56B1F7", high = "#132B43", limits = c(0, 1), name = "Proportion\nFound (1)") + # 蓝色渐变
+  # 6. 绘制Tile图 (热图)
+  p <- ggplot(count_data, aes(x = Genotype_Label, y = Status_Label, fill = N)) +
+    geom_tile(color = "black", size = 0.5) + # 绘制4个色块，并添加黑色边框
+    geom_text(aes(label = Label), color = "white", size = 3.5, fontface = "bold") + # 在色块内添加计数和百分比
+    scale_fill_gradient(low = "#56B1F7", high = "#132B43", name = "Cell Count") + # 蓝色渐变
     labs(
       title = title_label,
       subtitle = formatted_p, # 将P值作为副标题
       x = "Genotype",
-      y = NULL # 移除Y轴标签
+      y = "Loop Status" # 恢复Y轴标签
     ) +
     theme_classic() +
-    # 6. (关键) 调整主题以匹配箱线图的大小
     theme(
-      plot.title = element_text(hjust = 0.5, size = 12, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5, size = 9, face = "italic"), # 居中P值
-      axis.title.x = element_text(size = 10),
-      axis.text.x = element_text(size = 9),
+      plot.title = element_text(hjust = 0.5, size = 10, face = "bold"), # 缩小标题字体
+      plot.subtitle = element_text(hjust = 0.5, size = 9, face = "italic"),
+      axis.title = element_text(size = 10),
+      axis.text = element_text(size = 9), # 恢复Y轴文本
       legend.title = element_text(size = 10),
       legend.text = element_text(size = 9),
-      # 移除所有Y轴元素，使其在布局中对齐
-      axis.title.y = element_blank(),
-      axis.text.y = element_blank(),
-      axis.ticks.y = element_blank(),
-      axis.line.y = element_blank(),
-      plot.margin = unit(c(5, 5, 5, 5), "mm") # 保持与箱线图相同的边距
+      plot.margin = unit(c(5, 5, 5, 5), "mm")
     )
   
   return(p)
 }
 
 
-# --- 4. 遍历三元组并绘图 ---
+# --- 4. 遍历三元组并绘图 (v3.0 MODIFIED: 更新标题和函数调用) ---
 for (i in 1:nrow(triplets_data)) {
   
   # 获取当前三元组信息
@@ -212,11 +214,12 @@ for (i in 1:nrow(triplets_data)) {
   # 确保 full_snp_id 有值且格式正确
   if (!is.na(full_snp_id) && full_snp_id != "") {
     
-    # 从Full_SNP_ID解析REF和ALT等位基因
+    # (v3.0 假设: Full_SNP_ID 格式为 ID:REF:ALT 或 CHR:POS:REF:ALT)
+    # 修复了v2.0中对parts长度的错误假设，现在它取最后两个元素作为REF和ALT
     parts <- strsplit(full_snp_id, ":")[[1]]
-    if (length(parts) == 3) {
-      ref_base <- parts[2]
-      alt_base <- parts[3]
+    if (length(parts) >= 3) {
+      ref_base <- parts[length(parts) - 1] # 倒数第二个元素
+      alt_base <- parts[length(parts)]     # 最后一个元素
     } else {
       warning(paste("Invalid Full_SNP_ID format for triplet, skipping:", full_snp_id))
       next
@@ -249,48 +252,55 @@ for (i in 1:nrow(triplets_data)) {
     current_fl_pheno <- pheno_long %>% filter(trait == "FL") %>% inner_join(current_genotype, by = "Sample_ID")
     if (nrow(current_fl_pheno) > 0) plot_list$p_fl_pheno <- create_boxplot(current_fl_pheno, "FL Phenotype", "FL Phenotype", p_val_fl, ref_base, alt_base)
     
-    # --- 绘制 Loop强度箱线图 ---
+    # --- (v3.0 MODIFIED: 添加 Loop ID 到标题) ---
     if (!is.na(loop_id) && loop_id != "") {
       current_loop_strength <- loop_strength_long %>% filter(Loop_ID == loop_id) %>% inner_join(current_genotype, by = "Sample_ID")
       if (nrow(current_loop_strength) > 0) {
-        plot_list$p_loop_strength <- create_boxplot(current_loop_strength, "Loop Strength", "Loop Strength", p_val_loop_strength, ref_base, alt_base)
+        # 动态创建包含Loop ID的标题
+        loop_strength_title <- paste0("Loop Strength (", loop_id, ")")
+        plot_list$p_loop_strength <- create_boxplot(current_loop_strength, "Loop Strength", loop_strength_title, p_val_loop_strength, ref_base, alt_base)
       } else {
         plot_list$p_loop_strength <- ggplot() + theme_void() + labs(title = "No Loop Strength Data")
       }
     } else {
-      plot_list$p_loop_strength <- ggplot() + theme_void() + labs(title = "No Loop Data")
+      plot_list$p_loop_strength <- ggplot() + theme_void() + labs(title = "No Loop Data (B1 Pass)")
     }
     
-    # --- (*** 已修改: 绘制 Loop有无热图 ***) ---
+    # --- (v3.0 MODIFIED: 调用新的 2x2 热图函数并添加 Loop ID) ---
     if (!is.na(loop_id) && loop_id != "") {
       current_loop_status <- loop_status_long %>% filter(Loop_ID == loop_id) %>% inner_join(current_genotype, by = "Sample_ID")
       if (nrow(current_loop_status) > 0) {
-        # *** 调用新函数 ***
-        plot_list$p_loop_status_heatmap <- create_status_heatmap(current_loop_status, "Loop Status (Proportion)", p_val_loop_status, ref_base, alt_base)
+        # 动态创建包含Loop ID的标题
+        loop_status_title <- paste0("Loop Status (", loop_id, ")")
+        # *** 调用新的 2x2 热图函数 ***
+        plot_list$p_loop_status_contingency <- create_contingency_heatmap(current_loop_status, loop_status_title, p_val_loop_status, ref_base, alt_base)
       } else {
-        plot_list$p_loop_status_heatmap <- ggplot() + theme_void() + labs(title = "No Loop Status Data")
+        plot_list$p_loop_status_contingency <- ggplot() + theme_void() + labs(title = "No Loop Status Data")
       }
     } else {
-      plot_list$p_loop_status_heatmap <- ggplot() + theme_void() + labs(title = "No Loop Data")
+      plot_list$p_loop_status_contingency <- ggplot() + theme_void() + labs(title = "No Loop Data (B1 Pass)")
     }
     
-    # --- 组合所有子图 (*** 已修改: 更新为 2x3 布局，使用新热图 ***) ---
+    # --- 组合所有子图 (v3.0 MODIFIED: 更新为新的绘图对象名称) ---
     combined_plot <- (plot_list$p_tad_is + plot_list$p_fs_pheno + plot_list$p_loop_strength) /
-      (plot_list$p_gene_exp + plot_list$p_fl_pheno + plot_list$p_loop_status_heatmap) +
+      (plot_list$p_gene_exp + plot_list$p_fl_pheno + plot_list$p_loop_status_contingency) +
       plot_annotation(
-        title = paste0("Gene: ", gene_id, ", TAD: ", tad_id, ", SNP: ", snp_id) # 优化了的标题
+        title = paste0("Gene: ", gene_id, ", TAD: ", tad_id, ", SNP: ", snp_id) 
       ) & theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5))
     
     # 保存组合图像
-    output_filename_combined <- paste0(gene_id, "_", tad_id, "_", snp_id, "_Combined_Plots.png")
+    output_filename_combined <- paste0(gene_id, "_", tad_id, "_", snp_id, "_", loop_id, "_Combined_Plots_v3.png")
+    # 清理文件名，防止 loop_id 为 NA (B1通过时) 导致文件名中出现 "NA"
+    output_filename_combined <- gsub("_NA_", "_", output_filename_combined, fixed = TRUE) 
+    
     ggsave(
       filename = file.path(opt$output_dir, output_filename_combined),
       plot = combined_plot,
-      width = 10,  # 宽度调整为10，以更好地容纳三列图
-      height = 7,  # 高度保持7
-      dpi = 300      # DPI 调整为 300（600可能文件过大，300对期刊已足够）
+      width = 11,  # 宽度增加到11，以更好地容纳三列（2x2图的图例需要额外空间）
+      height = 7,  
+      dpi = 300 
     )
-    cat(paste("Generated combined plot for triplet:", gene_id, tad_id, snp_id, "\n"))
+    cat(paste("Generated combined plot for:", gene_id, tad_id, snp_id, loop_id, "\n"))
   } else {
     cat(paste("Skipping triplet due to missing Full_SNP_ID:", gene_id, tad_id, snp_id, "\n"))
   }

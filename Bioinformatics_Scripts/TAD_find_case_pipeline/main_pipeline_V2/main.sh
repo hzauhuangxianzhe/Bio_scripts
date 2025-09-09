@@ -255,7 +255,7 @@ main() {
     
     readonly POS_TRIPLETS_FILE_STEP6="${MAIN_OUTPUT_DIR}/triplets_with_positions_significant.csv" # Step 6 (重命名以反映输入)
     readonly FINAL_OUTPUT_DIR_STEP7="${MAIN_OUTPUT_DIR}/step7_branch_analysis"
-    readonly PASSED_TRIPLETS_FILE_STEP7="${FINAL_OUTPUT_DIR_STEP7}/passed_triplets_results.csv" # Step 7
+    readonly PASSED_TRIPLETS_FILE_STEP7="${FINAL_OUTPUT_DIR_STEP7}/passed_quadruplets_results.csv" # Step 7
     readonly PLOTS_OUTPUT_DIR_STEP8="${MAIN_OUTPUT_DIR}/final_summary_plots" # Step 8
     
     # V2 子脚本 (使用新版 step5)
